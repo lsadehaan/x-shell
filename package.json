@@ -1,6 +1,6 @@
 {
   "name": "x-shell.js",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "WebSocket-based terminal for Node.js - the truth is in your shell",
   "type": "module",
   "main": "dist/server/index.js",
