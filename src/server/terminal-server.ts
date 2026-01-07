@@ -132,8 +132,9 @@ export class TerminalServer {
 
   /**
    * Handle WebSocket connection
+   * Can be called directly for manual WebSocket upgrade handling
    */
-  private async handleConnection(ws: WebSocket, req: any): Promise<void> {
+  async handleConnection(ws: WebSocket, req: any): Promise<void> {
     // Load node-pty
     try {
       await this.initPty();
