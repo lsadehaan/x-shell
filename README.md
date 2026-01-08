@@ -48,13 +48,20 @@ See [node-pty docs](https://github.com/microsoft/node-pty) for platform-specific
 
 ### Client-Side (Browser)
 
-The client and UI components can be loaded directly from a CDN:
+The UI component can be loaded directly from a CDN - no build step required:
 
 ```html
+<!-- Using unpkg -->
 <script type="module" src="https://unpkg.com/x-shell.js/dist/ui/browser-bundle.js"></script>
+
+<!-- Or using jsDelivr -->
+<script type="module" src="https://cdn.jsdelivr.net/npm/x-shell.js/dist/ui/browser-bundle.js"></script>
+
+<!-- Pin to a specific version -->
+<script type="module" src="https://unpkg.com/x-shell.js@1.0.0-rc.1/dist/ui/browser-bundle.js"></script>
 ```
 
-No build step required for browser usage.
+The bundle includes the `<x-shell-terminal>` web component with xterm.js built-in.
 
 ## Quick Start
 

@@ -30,26 +30,15 @@ const server = createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(readFileSync(join(__dirname, 'index.html')));
   }
-  // Serve local x-shell bundles
-  else if (req.url === '/dist/ui/browser-bundle.js') {
-    const file = join(rootDir, 'dist/ui/browser-bundle.js');
+  // Serve source map if requested (for debugging)
+  else if (req.url === '/dist/ui/browser-bundle.js.map') {
+    const file = join(rootDir, 'dist/ui/browser-bundle.js.map');
     if (existsSync(file)) {
-      res.writeHead(200, { 'Content-Type': 'application/javascript' });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(readFileSync(file));
     } else {
       res.writeHead(404);
-      res.end('Bundle not found - run npm run build first');
-    }
-  }
-  // Serve xterm.js CSS from node_modules
-  else if (req.url === '/xterm.css') {
-    const file = join(rootDir, 'node_modules/xterm/css/xterm.css');
-    if (existsSync(file)) {
-      res.writeHead(200, { 'Content-Type': 'text/css' });
-      res.end(readFileSync(file));
-    } else {
-      res.writeHead(404);
-      res.end('xterm.css not found');
+      res.end('Source map not found');
     }
   }
   else {
