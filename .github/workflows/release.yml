@@ -55,8 +55,19 @@ jobs:
     - name: Build
       run: npm run build
 
+    - name: Determine NPM tag
+      id: npm-tag
+      run: |
+        VERSION=$(node -p "require('./package.json').version")
+        if [[ "$VERSION" == *"-"* ]]; then
+          echo "TAG=next" >> $GITHUB_OUTPUT
+        else
+          echo "TAG=latest" >> $GITHUB_OUTPUT
+        fi
+        echo "Publishing version $VERSION with tag: $(cat $GITHUB_OUTPUT | grep TAG | cut -d= -f2)"
+
     - name: Publish to NPM
-      run: npm publish --provenance --access public
+      run: npm publish --provenance --access public --tag ${{ steps.npm-tag.outputs.TAG }}
       env:
         NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
