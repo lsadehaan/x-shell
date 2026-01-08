@@ -462,6 +462,29 @@ See the [examples](./examples) directory for complete working examples:
 
 - [**docker-container**](./examples/docker-container) - Connect to Docker containers from the browser
 
+### Running Locally (Development)
+
+```bash
+# Clone the repository
+git clone https://github.com/lsadehaan/x-shell.git
+cd x-shell
+
+# Install dependencies (including node-pty)
+npm install
+npm install node-pty --save-dev --legacy-peer-deps
+
+# Build the project
+npm run build
+
+# Start a test container (optional, for Docker exec testing)
+docker run -d --name test-container alpine sleep infinity
+
+# Run the example server
+node examples/docker-container/server.js
+
+# Open http://localhost:3000 in your browser
+```
+
 ### Quick Start with Docker Compose
 
 Run the full demo with Docker Compose (no local node-pty installation required):
