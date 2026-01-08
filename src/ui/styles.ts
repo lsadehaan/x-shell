@@ -125,4 +125,26 @@ export const buttonStyles = css`
     opacity: 0.5;
     cursor: not-allowed;
   }
+
+  button.btn-primary,
+  .btn-primary {
+    background: var(--xs-status-connected);
+    color: #ffffff;
+  }
+
+  button.btn-primary:hover,
+  .btn-primary:hover {
+    background: #16a34a;
+  }
+
+  button.btn-danger,
+  .btn-danger {
+    background: var(--xs-status-disconnected);
+    color: #ffffff;
+  }
+
+  button.btn-danger:hover,
+  .btn-danger:hover {
+    background: #dc2626;
+  }
 `;

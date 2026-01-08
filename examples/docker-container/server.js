@@ -14,19 +14,45 @@
  */
 
 import { createServer } from 'http';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { TerminalServer } from 'x-shell.js/server';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const rootDir = join(__dirname, '../..');
 
 // Create HTTP server
 const server = createServer((req, res) => {
+  console.log(`[HTTP] ${req.method} ${req.url}`);
+
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(readFileSync(join(__dirname, 'index.html')));
-  } else {
+  }
+  // Serve local x-shell bundles
+  else if (req.url === '/dist/ui/browser-bundle.js') {
+    const file = join(rootDir, 'dist/ui/browser-bundle.js');
+    if (existsSync(file)) {
+      res.writeHead(200, { 'Content-Type': 'application/javascript' });
+      res.end(readFileSync(file));
+    } else {
+      res.writeHead(404);
+      res.end('Bundle not found - run npm run build first');
+    }
+  }
+  // Serve xterm.js CSS from node_modules
+  else if (req.url === '/xterm.css') {
+    const file = join(rootDir, 'node_modules/xterm/css/xterm.css');
+    if (existsSync(file)) {
+      res.writeHead(200, { 'Content-Type': 'text/css' });
+      res.end(readFileSync(file));
+    } else {
+      res.writeHead(404);
+      res.end('xterm.css not found');
+    }
+  }
+  else {
     res.writeHead(404);
     res.end('Not found');
   }

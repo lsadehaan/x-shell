@@ -1,0 +1,41 @@
+# x-shell.js Docker Compose Demo
+#
+# This demo includes:
+# - x-shell server with Docker exec support
+# - Test containers to exec into
+#
+# Usage:
+#   docker compose up -d
+#   Open http://localhost:3000
+
+services:
+  # x-shell terminal server
+  x-shell:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount Docker socket for container exec
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - alpine-container
+      - ubuntu-container
+    restart: unless-stopped
+
+  # Test container - Alpine Linux
+  alpine-container:
+    image: alpine:latest
+    container_name: test-alpine
+    command: sleep infinity
+    restart: unless-stopped
+
+  # Test container - Ubuntu
+  ubuntu-container:
+    image: ubuntu:22.04
+    container_name: test-ubuntu
+    command: sleep infinity
+    restart: unless-stopped

@@ -64,7 +64,31 @@ export type MessageType =
   | 'close'
   | 'error'
   | 'exit'
-  | 'spawned';
+  | 'spawned'
+  | 'listContainers'
+  | 'containerList'
+  | 'serverInfo';
+
+/**
+ * Docker container info
+ */
+export interface ContainerInfo {
+  id: string;
+  name: string;
+  image: string;
+  status: string;
+  state: 'running' | 'paused' | 'exited' | 'unknown';
+}
+
+/**
+ * Server capabilities info
+ */
+export interface ServerInfo {
+  dockerEnabled: boolean;
+  allowedShells: string[];
+  defaultShell: string;
+  defaultContainerShell?: string;
+}
 
 /**
  * Base message structure
@@ -142,6 +166,29 @@ export interface ExitMessage extends BaseMessage {
 }
 
 /**
+ * List containers request from client
+ */
+export interface ListContainersMessage extends BaseMessage {
+  type: 'listContainers';
+}
+
+/**
+ * Container list response from server
+ */
+export interface ContainerListMessage extends BaseMessage {
+  type: 'containerList';
+  containers: ContainerInfo[];
+}
+
+/**
+ * Server info response (sent on connect)
+ */
+export interface ServerInfoMessage extends BaseMessage {
+  type: 'serverInfo';
+  info: ServerInfo;
+}
+
+/**
  * Union of all message types
  */
 export type TerminalMessage =
@@ -151,7 +198,10 @@ export type TerminalMessage =
   | ResizeMessage
   | CloseMessage
   | ErrorMessage
-  | ExitMessage;
+  | ExitMessage
+  | ListContainersMessage
+  | ContainerListMessage
+  | ServerInfoMessage;
 
 /**
  * Client configuration

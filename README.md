@@ -17,10 +17,44 @@ A plug-and-play terminal solution for web applications. Includes a server compon
 ## Installation
 
 ```bash
-npm install x-shell.js node-pty
+npm install x-shell.js
 ```
 
-Note: `node-pty` requires native compilation. See [node-pty docs](https://github.com/microsoft/node-pty) for platform-specific requirements.
+### Server-Side Requirements (node-pty)
+
+The server component requires `node-pty` for spawning terminal processes. Install it as a dev dependency:
+
+```bash
+npm install node-pty --save-dev
+```
+
+**Important:** `node-pty` requires native compilation. If you encounter installation issues:
+
+```bash
+# Linux - install build essentials
+sudo apt-get install build-essential python3
+
+# macOS - install Xcode command line tools
+xcode-select --install
+
+# If npm install fails, try:
+npm install node-pty --save-dev --legacy-peer-deps
+
+# Or rebuild native modules:
+npm rebuild node-pty
+```
+
+See [node-pty docs](https://github.com/microsoft/node-pty) for platform-specific requirements.
+
+### Client-Side (Browser)
+
+The client and UI components can be loaded directly from a CDN:
+
+```html
+<script type="module" src="https://unpkg.com/x-shell.js/dist/ui/browser-bundle.js"></script>
+```
+
+No build step required for browser usage.
 
 ## Quick Start
 
@@ -213,6 +247,9 @@ client.getSessionInfo();   // SessionInfo | null
   auto-connect
   auto-spawn
   no-header
+  show-connection-panel
+  show-settings
+  show-status-bar
 ></x-shell-terminal>
 ```
 
@@ -231,6 +268,9 @@ client.getSessionInfo();   // SessionInfo | null
 | `auto-connect` | boolean | `false` | Connect on mount |
 | `auto-spawn` | boolean | `false` | Spawn on connect |
 | `no-header` | boolean | `false` | Hide header bar |
+| `show-connection-panel` | boolean | `false` | Show connection panel with container/shell selector |
+| `show-settings` | boolean | `false` | Show settings dropdown (theme, font size) |
+| `show-status-bar` | boolean | `false` | Show status bar with connection info and errors |
 
 **Methods:**
 
@@ -255,6 +295,30 @@ terminal.addEventListener('disconnect', () => {});
 terminal.addEventListener('spawned', (e) => console.log(e.detail.session));
 terminal.addEventListener('exit', (e) => console.log(e.detail.exitCode));
 terminal.addEventListener('error', (e) => console.log(e.detail.error));
+terminal.addEventListener('theme-change', (e) => console.log(e.detail.theme));
+```
+
+### Built-in Connection Panel
+
+When `show-connection-panel` is enabled, the terminal component provides a built-in UI for:
+
+- **Mode Selection**: Switch between local shell and Docker container modes
+- **Container Picker**: Dropdown of running containers (when Docker is enabled on server)
+- **Shell Selection**: Choose from server-allowed shells
+- **Connect/Disconnect**: One-click session management
+
+The connection panel automatically queries the server for:
+- Docker availability and allowed containers
+- Allowed shells and default configuration
+
+```html
+<!-- Full-featured terminal with all UI panels -->
+<x-shell-terminal
+  url="ws://localhost:3000/terminal"
+  show-connection-panel
+  show-settings
+  show-status-bar
+></x-shell-terminal>
 ```
 
 ## Theming
@@ -390,6 +454,30 @@ const server = new TerminalServer({
 See the [examples](./examples) directory for complete working examples:
 
 - [**docker-container**](./examples/docker-container) - Connect to Docker containers from the browser
+
+### Quick Start with Docker Compose
+
+Run the full demo with Docker Compose (no local node-pty installation required):
+
+```bash
+cd docker
+docker compose up -d
+```
+
+This starts:
+- x-shell server on http://localhost:3000
+- Two test containers (Alpine and Ubuntu) to exec into
+
+Open http://localhost:3000 and use the connection panel to:
+1. Select "Docker Container" mode
+2. Choose a container from the dropdown
+3. Click "Start Session"
+
+Stop the demo:
+
+```bash
+docker compose down
+```
 
 ## License
 

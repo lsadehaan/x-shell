@@ -23,6 +23,8 @@ import type {
   TerminalOptions,
   TerminalMessage,
   SessionInfo,
+  ContainerInfo,
+  ServerInfo,
 } from '../shared/types.js';
 
 /**
@@ -39,6 +41,7 @@ export class TerminalClient {
   private state: ConnectionState = 'disconnected';
   private sessionId: string | null = null;
   private sessionInfo: SessionInfo | null = null;
+  private serverInfo: ServerInfo | null = null;
   private reconnectAttempts = 0;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -49,6 +52,8 @@ export class TerminalClient {
   private exitHandlers: ((code: number) => void)[] = [];
   private errorHandlers: ((error: Error) => void)[] = [];
   private spawnedHandlers: ((info: SessionInfo) => void)[] = [];
+  private serverInfoHandlers: ((info: ServerInfo) => void)[] = [];
+  private containerListHandlers: ((containers: ContainerInfo[]) => void)[] = [];
 
   // Promise resolvers for spawn
   private spawnResolve: ((info: SessionInfo) => void) | null = null;
@@ -213,6 +218,15 @@ export class TerminalClient {
           this.spawnReject = null;
         }
         break;
+
+      case 'serverInfo':
+        this.serverInfo = message.info;
+        this.serverInfoHandlers.forEach((handler) => handler(message.info));
+        break;
+
+      case 'containerList':
+        this.containerListHandlers.forEach((handler) => handler(message.containers));
+        break;
     }
   }
 
@@ -359,6 +373,36 @@ export class TerminalClient {
     this.spawnedHandlers.push(handler);
   }
 
+  /**
+   * Called when server info is received
+   */
+  onServerInfo(handler: (info: ServerInfo) => void): void {
+    this.serverInfoHandlers.push(handler);
+    // If we already have server info, call immediately
+    if (this.serverInfo) {
+      handler(this.serverInfo);
+    }
+  }
+
+  /**
+   * Called when container list is received
+   */
+  onContainerList(handler: (containers: ContainerInfo[]) => void): void {
+    this.containerListHandlers.push(handler);
+  }
+
+  /**
+   * Request list of available containers
+   */
+  requestContainerList(): void {
+    if (!this.ws || this.state !== 'connected') {
+      console.error('[x-shell] Cannot request containers: not connected');
+      return;
+    }
+
+    this.ws.send(JSON.stringify({ type: 'listContainers' }));
+  }
+
   // ==========================================
   // Getters
   // ==========================================
@@ -396,5 +440,12 @@ export class TerminalClient {
    */
   hasActiveSession(): boolean {
     return this.sessionId !== null;
+  }
+
+  /**
+   * Get server info
+   */
+  getServerInfo(): ServerInfo | null {
+    return this.serverInfo;
   }
 }

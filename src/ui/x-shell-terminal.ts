@@ -19,9 +19,23 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sharedStyles, buttonStyles, themeStyles } from './styles.js';
 import { TerminalClient } from '../client/terminal-client.js';
-import type { TerminalOptions, SessionInfo } from '../shared/types.js';
+import type { TerminalOptions, SessionInfo, ContainerInfo, ServerInfo } from '../shared/types.js';
 
 // xterm.js types (loaded dynamically)
+interface ITerminalOptions {
+  theme?: {
+    background?: string;
+    foreground?: string;
+    cursor?: string;
+    cursorAccent?: string;
+    selection?: string;
+    selectionForeground?: string;
+  };
+  fontSize?: number;
+  fontFamily?: string;
+  cursorBlink?: boolean;
+}
+
 interface ITerminal {
   open(parent: HTMLElement): void;
   write(data: string): void;
@@ -34,6 +48,7 @@ interface ITerminal {
   loadAddon(addon: any): void;
   cols: number;
   rows: number;
+  options: ITerminalOptions;
 }
 
 interface IFitAddon {
@@ -146,6 +161,139 @@ export class XShellTerminal extends LitElement {
       :host([no-header]) .header {
         display: none;
       }
+
+      /* Connection panel */
+      .connection-panel {
+        padding: 12px;
+        background: var(--xs-bg-header);
+        border-bottom: 1px solid var(--xs-border);
+      }
+
+      .connection-panel-title {
+        font-weight: 600;
+        margin-bottom: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .connection-form {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 10px;
+        align-items: end;
+      }
+
+      .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .form-group label {
+        font-size: 11px;
+        text-transform: uppercase;
+        color: var(--xs-text-muted);
+        letter-spacing: 0.5px;
+      }
+
+      .form-group select,
+      .form-group input {
+        padding: 6px 10px;
+        border: 1px solid var(--xs-border);
+        border-radius: 4px;
+        background: var(--xs-bg);
+        color: var(--xs-text);
+        font-size: 13px;
+      }
+
+      .form-group select:focus,
+      .form-group input:focus {
+        outline: none;
+        border-color: var(--xs-status-connected);
+      }
+
+      /* Settings dropdown */
+      .settings-dropdown {
+        position: relative;
+      }
+
+      .settings-menu {
+        position: absolute;
+        top: 100%;
+        right: 0;
+        margin-top: 4px;
+        min-width: 180px;
+        background: var(--xs-bg-header);
+        border: 1px solid var(--xs-border);
+        border-radius: 4px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        z-index: 100;
+        padding: 8px 0;
+      }
+
+      .settings-menu-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 12px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      .settings-menu-item:hover {
+        background: var(--xs-btn-hover);
+      }
+
+      .settings-menu-item select {
+        padding: 4px 8px;
+        border: 1px solid var(--xs-border);
+        border-radius: 3px;
+        background: var(--xs-bg);
+        color: var(--xs-text);
+        font-size: 12px;
+      }
+
+      .settings-divider {
+        height: 1px;
+        background: var(--xs-border);
+        margin: 4px 0;
+      }
+
+      /* Status bar */
+      .status-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 12px;
+        background: var(--xs-bg-header);
+        border-top: 1px solid var(--xs-border);
+        font-size: 12px;
+        color: var(--xs-text-muted);
+      }
+
+      .status-bar-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .status-bar-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .status-bar-error {
+        color: #ef4444;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .status-bar-success {
+        color: var(--xs-status-connected);
+      }
     `,
   ];
 
@@ -166,6 +314,11 @@ export class XShellTerminal extends LitElement {
   @property({ type: String, attribute: 'container-user' }) containerUser = '';
   @property({ type: String, attribute: 'container-cwd' }) containerCwd = '';
 
+  // UI panel options
+  @property({ type: Boolean, attribute: 'show-connection-panel' }) showConnectionPanel = false;
+  @property({ type: Boolean, attribute: 'show-settings' }) showSettings = false;
+  @property({ type: Boolean, attribute: 'show-status-bar' }) showStatusBar = false;
+
   // Terminal appearance
   @property({ type: Number, attribute: 'font-size' }) fontSize = 14;
   @property({ type: String, attribute: 'font-family' }) fontFamily =
@@ -180,6 +333,20 @@ export class XShellTerminal extends LitElement {
   @state() private loading = false;
   @state() private error: string | null = null;
   @state() private sessionInfo: SessionInfo | null = null;
+
+  // Connection panel state
+  @state() private containers: ContainerInfo[] = [];
+  @state() private serverInfo: ServerInfo | null = null;
+  @state() private selectedContainer = '';
+  @state() private selectedShell = '/bin/sh';
+  @state() private connectionMode: 'local' | 'docker' = 'docker';
+
+  // Settings state
+  @state() private settingsMenuOpen = false;
+
+  // Status bar state
+  @state() private statusMessage = '';
+  @state() private statusType: 'info' | 'error' | 'success' = 'info';
 
   // xterm.js module (loaded dynamically)
   private xtermModule: any = null;
@@ -222,6 +389,33 @@ export class XShellTerminal extends LitElement {
         throw new Error('Failed to load xterm.js. Make sure it is available.');
       }
     }
+
+    // Inject xterm CSS into shadow DOM (required because CSS doesn't cross shadow boundaries)
+    await this.injectXtermCSS();
+  }
+
+  /**
+   * Inject xterm.js CSS into shadow DOM
+   */
+  private async injectXtermCSS(): Promise<void> {
+    if (!this.shadowRoot) return;
+
+    // Check if already injected
+    if (this.shadowRoot.querySelector('#xterm-styles')) return;
+
+    try {
+      // Fetch xterm CSS from CDN
+      const response = await fetch('https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css');
+      const css = await response.text();
+
+      // Create style element and inject into shadow DOM
+      const style = document.createElement('style');
+      style.id = 'xterm-styles';
+      style.textContent = css;
+      this.shadowRoot.prepend(style);
+    } catch (e) {
+      console.warn('[x-shell] Failed to load xterm CSS:', e);
+    }
   }
 
   /**
@@ -260,6 +454,7 @@ export class XShellTerminal extends LitElement {
 
       this.client.onError((err) => {
         this.error = err.message;
+        this.setStatus(err.message, 'error');
         this.dispatchEvent(
           new CustomEvent('error', { detail: { error: err }, bubbles: true, composed: true })
         );
@@ -285,9 +480,27 @@ export class XShellTerminal extends LitElement {
 
       this.client.onSpawned((info) => {
         this.sessionInfo = info;
+        this.setStatus(`Session started: ${info.container || info.shell}`, 'success');
         this.dispatchEvent(
           new CustomEvent('spawned', { detail: { session: info }, bubbles: true, composed: true })
         );
+      });
+
+      // Server info and container list handlers
+      this.client.onServerInfo((info) => {
+        this.serverInfo = info;
+        if (info.dockerEnabled) {
+          this.connectionMode = 'docker';
+          this.client?.requestContainerList();
+        }
+        this.selectedShell = info.defaultShell;
+      });
+
+      this.client.onContainerList((containers) => {
+        this.containers = containers;
+        if (containers.length > 0 && !this.selectedContainer) {
+          this.selectedContainer = containers[0].name;
+        }
       });
 
       await this.client.connect();
@@ -313,7 +526,7 @@ export class XShellTerminal extends LitElement {
   /**
    * Spawn a terminal session
    */
-  async spawn(options?: TerminalOptions): Promise<void> {
+  async spawn(options?: TerminalOptions): Promise<SessionInfo> {
     if (!this.client || !this.connected) {
       throw new Error('Not connected to server');
     }
@@ -347,8 +560,11 @@ export class XShellTerminal extends LitElement {
       if (this.terminal) {
         this.terminal.focus();
       }
+
+      return info;
     } catch (err) {
       this.error = err instanceof Error ? err.message : 'Failed to spawn session';
+      throw err;
     } finally {
       this.loading = false;
     }
@@ -421,22 +637,31 @@ export class XShellTerminal extends LitElement {
    * Get terminal theme based on component theme
    */
   private getTerminalTheme(): any {
-    // These will be overridden by CSS variables in the actual implementation
-    // For now, provide sensible defaults based on theme attribute
-    if (this.theme === 'light') {
+    // Determine effective theme (handle 'auto' by checking system preference)
+    let effectiveTheme = this.theme;
+    if (this.theme === 'auto') {
+      effectiveTheme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+
+    if (effectiveTheme === 'light') {
       return {
         background: '#ffffff',
         foreground: '#1f2937',
         cursor: '#1f2937',
+        cursorAccent: '#ffffff',
         selection: '#b4d5fe',
+        selectionForeground: '#1f2937',
       };
     }
 
+    // Dark theme
     return {
       background: '#1e1e1e',
       foreground: '#cccccc',
       cursor: '#ffffff',
+      cursorAccent: '#1e1e1e',
       selection: '#264f78',
+      selectionForeground: '#ffffff',
     };
   }
 
@@ -509,6 +734,282 @@ export class XShellTerminal extends LitElement {
     this.fitAddon = null;
   }
 
+  /**
+   * Set status message
+   */
+  private setStatus(message: string, type: 'info' | 'error' | 'success' = 'info'): void {
+    this.statusMessage = message;
+    this.statusType = type;
+
+    // Auto-clear success/info messages after 5 seconds
+    if (type !== 'error') {
+      setTimeout(() => {
+        if (this.statusMessage === message) {
+          this.statusMessage = '';
+        }
+      }, 5000);
+    }
+  }
+
+  /**
+   * Clear status message
+   */
+  clearStatus(): void {
+    this.statusMessage = '';
+    this.statusType = 'info';
+  }
+
+  /**
+   * Handle theme change
+   */
+  private handleThemeChange(e: Event): void {
+    const select = e.target as HTMLSelectElement;
+    this.theme = select.value as 'dark' | 'light' | 'auto';
+
+    // Apply theme to xterm.js terminal
+    this.applyTerminalTheme();
+
+    this.dispatchEvent(new CustomEvent('theme-change', {
+      detail: { theme: this.theme },
+      bubbles: true,
+      composed: true
+    }));
+  }
+
+  /**
+   * Apply current theme to xterm.js terminal
+   */
+  private applyTerminalTheme(): void {
+    if (!this.terminal) return;
+
+    const terminalTheme = this.getTerminalTheme();
+    this.terminal.options.theme = terminalTheme;
+  }
+
+  /**
+   * Apply current font size to xterm.js terminal
+   */
+  private applyTerminalFontSize(): void {
+    if (!this.terminal) return;
+
+    this.terminal.options.fontSize = this.fontSize;
+
+    // Re-fit the terminal after font size change
+    if (this.fitAddon) {
+      this.fitAddon.fit();
+    }
+  }
+
+  /**
+   * Handle connection mode change
+   */
+  private handleModeChange(e: Event): void {
+    const select = e.target as HTMLSelectElement;
+    this.connectionMode = select.value as 'local' | 'docker';
+
+    if (this.connectionMode === 'docker' && this.client && this.connected) {
+      this.client.requestContainerList();
+    }
+  }
+
+  /**
+   * Handle connect from connection panel
+   */
+  private async handlePanelConnect(): Promise<void> {
+    if (!this.connected) {
+      await this.connect();
+    }
+
+    if (this.connected) {
+      const options: TerminalOptions = {};
+
+      if (this.connectionMode === 'docker' && this.selectedContainer) {
+        options.container = this.selectedContainer;
+        options.containerShell = this.selectedShell || '/bin/sh';
+      } else {
+        options.shell = this.selectedShell || undefined;
+      }
+
+      await this.spawn(options);
+    }
+  }
+
+  /**
+   * Toggle settings menu
+   */
+  private toggleSettingsMenu(): void {
+    this.settingsMenuOpen = !this.settingsMenuOpen;
+  }
+
+  /**
+   * Render connection panel
+   */
+  private renderConnectionPanel() {
+    if (!this.showConnectionPanel) return nothing;
+
+    const runningContainers = this.containers.filter(c => c.state === 'running');
+
+    return html`
+      <div class="connection-panel">
+        <div class="connection-panel-title">
+          <span>Connection</span>
+          ${this.serverInfo?.dockerEnabled
+            ? html`<span style="font-size: 11px; color: var(--xs-status-connected);">Docker enabled</span>`
+            : nothing}
+        </div>
+        <div class="connection-form">
+          <div class="form-group">
+            <label>Mode</label>
+            <select
+              .value=${this.connectionMode}
+              @change=${this.handleModeChange}
+              ?disabled=${this.sessionActive}
+            >
+              <option value="local">Local Shell</option>
+              ${this.serverInfo?.dockerEnabled
+                ? html`<option value="docker">Docker Container</option>`
+                : nothing}
+            </select>
+          </div>
+
+          ${this.connectionMode === 'docker' ? html`
+            <div class="form-group">
+              <label>Container</label>
+              <select
+                .value=${this.selectedContainer}
+                @change=${(e: Event) => this.selectedContainer = (e.target as HTMLSelectElement).value}
+                ?disabled=${this.sessionActive}
+              >
+                ${runningContainers.length === 0
+                  ? html`<option value="">No containers running</option>`
+                  : runningContainers.map(c => html`
+                      <option value=${c.name}>${c.name} (${c.image})</option>
+                    `)}
+              </select>
+            </div>
+          ` : nothing}
+
+          <div class="form-group">
+            <label>Shell</label>
+            <select
+              .value=${this.selectedShell}
+              @change=${(e: Event) => this.selectedShell = (e.target as HTMLSelectElement).value}
+              ?disabled=${this.sessionActive}
+            >
+              ${this.serverInfo?.allowedShells.length
+                ? this.serverInfo.allowedShells.map(s => html`<option value=${s}>${s}</option>`)
+                : html`
+                    <option value="/bin/bash">/bin/bash</option>
+                    <option value="/bin/sh">/bin/sh</option>
+                    <option value="/bin/zsh">/bin/zsh</option>
+                  `}
+            </select>
+          </div>
+
+          <div class="form-group">
+            ${!this.connected
+              ? html`<button class="btn-primary" @click=${this.handlePanelConnect} ?disabled=${this.loading}>
+                  ${this.loading ? 'Connecting...' : 'Connect'}
+                </button>`
+              : !this.sessionActive
+              ? html`<button class="btn-primary" @click=${this.handlePanelConnect} ?disabled=${this.loading}>
+                  ${this.loading ? 'Starting...' : 'Start Session'}
+                </button>`
+              : html`<button class="btn-danger" @click=${this.kill}>
+                  Stop Session
+                </button>`}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * Render settings dropdown
+   */
+  private renderSettingsDropdown() {
+    if (!this.showSettings) return nothing;
+
+    return html`
+      <div class="settings-dropdown">
+        <button @click=${this.toggleSettingsMenu} title="Settings">
+          ⚙️
+        </button>
+        ${this.settingsMenuOpen ? html`
+          <div class="settings-menu">
+            <div class="settings-menu-item">
+              <span>Theme</span>
+              <select
+                .value=${this.theme}
+                @change=${this.handleThemeChange}
+              >
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+                <option value="auto">Auto</option>
+              </select>
+            </div>
+            <div class="settings-divider"></div>
+            <div class="settings-menu-item">
+              <span>Font Size</span>
+              <select
+                .value=${String(this.fontSize)}
+                @change=${(e: Event) => {
+                  this.fontSize = parseInt((e.target as HTMLSelectElement).value);
+                  this.applyTerminalFontSize();
+                }}
+              >
+                <option value="12">12px</option>
+                <option value="14">14px</option>
+                <option value="16">16px</option>
+                <option value="18">18px</option>
+              </select>
+            </div>
+            <div class="settings-divider"></div>
+            <div class="settings-menu-item" @click=${this.clear}>
+              <span>Clear Terminal</span>
+            </div>
+          </div>
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  /**
+   * Render status bar
+   */
+  private renderStatusBar() {
+    if (!this.showStatusBar) return nothing;
+
+    return html`
+      <div class="status-bar">
+        <div class="status-bar-left">
+          <span class="status-dot ${this.connected ? 'connected' : ''}"></span>
+          <span>${this.connected
+            ? (this.sessionActive ? 'Session active' : 'Connected')
+            : 'Disconnected'}</span>
+          ${this.sessionInfo ? html`
+            <span style="color: var(--xs-text-muted)">|</span>
+            <span>${this.sessionInfo.container || this.sessionInfo.shell}</span>
+            <span style="color: var(--xs-text-muted)">${this.sessionInfo.cols}x${this.sessionInfo.rows}</span>
+          ` : nothing}
+        </div>
+        <div class="status-bar-right">
+          ${this.statusMessage ? html`
+            <span class="${this.statusType === 'error' ? 'status-bar-error' : this.statusType === 'success' ? 'status-bar-success' : ''}">
+              ${this.statusType === 'error' ? '⚠️' : this.statusType === 'success' ? '✓' : ''}
+              ${this.statusMessage}
+            </span>
+            <button
+              style="background: none; border: none; cursor: pointer; padding: 0; font-size: 10px;"
+              @click=${this.clearStatus}
+              title="Dismiss"
+            >✕</button>
+          ` : nothing}
+        </div>
+      </div>
+    `;
+  }
+
   override render() {
     return html`
       ${this.noHeader
@@ -526,23 +1027,30 @@ export class XShellTerminal extends LitElement {
                   : nothing}
               </div>
               <div class="header-actions">
-                ${!this.connected
-                  ? html`<button @click=${this.connect} ?disabled=${this.loading}>
-                      ${this.loading ? 'Connecting...' : 'Connect'}
-                    </button>`
-                  : !this.sessionActive
-                  ? html`<button @click=${() => this.spawn()} ?disabled=${this.loading}>
-                      ${this.loading ? 'Spawning...' : 'Start'}
-                    </button>`
-                  : html`<button @click=${this.kill}>Stop</button>`}
+                ${!this.showConnectionPanel ? html`
+                  ${!this.connected
+                    ? html`<button @click=${this.connect} ?disabled=${this.loading}>
+                        ${this.loading ? 'Connecting...' : 'Connect'}
+                      </button>`
+                    : !this.sessionActive
+                    ? html`<button @click=${() => this.spawn()} ?disabled=${this.loading}>
+                        ${this.loading ? 'Spawning...' : 'Start'}
+                      </button>`
+                    : html`<button @click=${this.kill}>Stop</button>`}
+                ` : nothing}
                 <button @click=${this.clear} ?disabled=${!this.sessionActive}>Clear</button>
-                <div class="status">
-                  <span class="status-dot ${this.connected ? 'connected' : ''}"></span>
-                  <span>${this.connected ? 'Connected' : 'Disconnected'}</span>
-                </div>
+                ${this.renderSettingsDropdown()}
+                ${!this.showStatusBar ? html`
+                  <div class="status">
+                    <span class="status-dot ${this.connected ? 'connected' : ''}"></span>
+                    <span>${this.connected ? 'Connected' : 'Disconnected'}</span>
+                  </div>
+                ` : nothing}
               </div>
             </div>
           `}
+
+      ${this.renderConnectionPanel()}
 
       <div class="terminal-container">
         ${this.loading && !this.terminal
@@ -551,6 +1059,8 @@ export class XShellTerminal extends LitElement {
           ? html`<div class="error">❌ ${this.error}</div>`
           : nothing}
       </div>
+
+      ${this.renderStatusBar()}
     `;
   }
 }

@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>x-shell Docker Container Example</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
   <style>
     * {
       box-sizing: border-box;
@@ -30,120 +29,14 @@
       margin: 0 auto;
     }
 
-    .controls {
-      display: flex;
-      gap: 10px;
-      margin-bottom: 20px;
-      flex-wrap: wrap;
-      align-items: flex-end;
-    }
-
-    .form-group {
-      display: flex;
-      flex-direction: column;
-      gap: 5px;
-    }
-
-    label {
-      font-size: 12px;
-      color: #888;
-      text-transform: uppercase;
-    }
-
-    input, select {
-      padding: 8px 12px;
-      border: 1px solid #333;
-      border-radius: 4px;
-      background: #2a2a4e;
-      color: #fff;
-      font-size: 14px;
-      min-width: 150px;
-    }
-
-    input:focus, select:focus {
-      outline: none;
-      border-color: #4ade80;
-    }
-
-    button {
-      padding: 8px 20px;
-      border: none;
-      border-radius: 4px;
-      font-size: 14px;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-
-    button.primary {
-      background: #4ade80;
-      color: #1a1a2e;
-    }
-
-    button.primary:hover {
-      background: #22c55e;
-    }
-
-    button.secondary {
-      background: #3b3b5e;
-      color: #fff;
-    }
-
-    button.secondary:hover {
-      background: #4a4a6e;
-    }
-
-    button.danger {
-      background: #ef4444;
-      color: #fff;
-    }
-
-    button.danger:hover {
-      background: #dc2626;
-    }
-
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
     .terminal-wrapper {
-      height: 500px;
+      height: 600px;
       border-radius: 8px;
       overflow: hidden;
     }
 
     x-shell-terminal {
       height: 100%;
-    }
-
-    .status {
-      margin-top: 15px;
-      padding: 10px;
-      background: #2a2a4e;
-      border-radius: 4px;
-      font-size: 13px;
-    }
-
-    .status-item {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 5px;
-    }
-
-    .status-item:last-child {
-      margin-bottom: 0;
-    }
-
-    .dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #ef4444;
-    }
-
-    .dot.connected {
-      background: #4ade80;
     }
 
     .info {
@@ -180,51 +73,14 @@
   <div class="container">
     <h1>x-shell Docker Container Example</h1>
 
-    <div class="controls">
-      <div class="form-group">
-        <label>Connection Mode</label>
-        <select id="mode">
-          <option value="docker">Docker Container</option>
-          <option value="local">Local Shell</option>
-        </select>
-      </div>
-
-      <div class="form-group" id="container-group">
-        <label>Container Name/ID</label>
-        <input type="text" id="container" placeholder="test-container" value="test-container">
-      </div>
-
-      <div class="form-group">
-        <label>Shell</label>
-        <input type="text" id="shell" placeholder="/bin/sh" value="/bin/sh">
-      </div>
-
-      <div class="form-group" id="user-group">
-        <label>User (optional)</label>
-        <input type="text" id="user" placeholder="root">
-      </div>
-
-      <button class="primary" id="connect-btn">Connect</button>
-      <button class="secondary" id="disconnect-btn" disabled>Disconnect</button>
-    </div>
-
     <div class="terminal-wrapper">
       <x-shell-terminal
         id="terminal"
-        url="ws://localhost:3000/terminal"
         theme="dark"
+        show-connection-panel
+        show-settings
+        show-status-bar
       ></x-shell-terminal>
-    </div>
-
-    <div class="status">
-      <div class="status-item">
-        <span class="dot" id="connection-dot"></span>
-        <span id="connection-status">Disconnected</span>
-      </div>
-      <div class="status-item" id="session-info" style="display: none;">
-        <span>Session: </span>
-        <span id="session-details"></span>
-      </div>
     </div>
 
     <div class="info">
@@ -232,117 +88,53 @@
       <p>
         1. Make sure Docker is running on this machine.<br>
         2. Start a test container: <code>docker run -d --name test-container alpine sleep infinity</code><br>
-        3. Enter the container name above and click "Connect".<br>
-        4. You'll get a shell inside the container!<br>
-        5. Try running: <code>cat /etc/os-release</code> to see you're inside Alpine Linux.
+        3. The terminal will automatically detect Docker is enabled and show available containers.<br>
+        4. Select a container from the dropdown and click "Connect".<br>
+        5. You'll get a shell inside the container!<br>
+        6. Try running: <code>cat /etc/os-release</code> to see you're inside Alpine Linux.<br>
+        7. Use the settings dropdown (gear icon) to change theme and font size.
       </p>
     </div>
   </div>
 
-  <script type="module" src="https://unpkg.com/x-shell.js/dist/ui/browser-bundle.js"></script>
+  <script type="module" src="/dist/ui/browser-bundle.js"></script>
   <script type="module">
     const terminal = document.getElementById('terminal');
-    const modeSelect = document.getElementById('mode');
-    const containerInput = document.getElementById('container');
-    const containerGroup = document.getElementById('container-group');
-    const userGroup = document.getElementById('user-group');
-    const shellInput = document.getElementById('shell');
-    const userInput = document.getElementById('user');
-    const connectBtn = document.getElementById('connect-btn');
-    const disconnectBtn = document.getElementById('disconnect-btn');
-    const connectionDot = document.getElementById('connection-dot');
-    const connectionStatus = document.getElementById('connection-status');
-    const sessionInfo = document.getElementById('session-info');
-    const sessionDetails = document.getElementById('session-details');
 
-    // Toggle container fields based on mode
-    modeSelect.addEventListener('change', () => {
-      const isDocker = modeSelect.value === 'docker';
-      containerGroup.style.display = isDocker ? 'flex' : 'none';
-      userGroup.style.display = isDocker ? 'flex' : 'none';
-      shellInput.value = isDocker ? '/bin/sh' : '/bin/bash';
+    // Set WebSocket URL dynamically based on current host
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProtocol}//${window.location.host}/terminal`;
+    terminal.url = wsUrl;
+    console.log('WebSocket URL:', wsUrl);
+
+    // Connect to the server on page load (just connect, don't spawn yet)
+    terminal.connect().catch(err => {
+      console.error('Failed to connect:', err);
     });
 
-    // Connect button
-    connectBtn.addEventListener('click', async () => {
-      connectBtn.disabled = true;
-
-      try {
-        // Connect to WebSocket server
-        await terminal.connect();
-        connectionDot.classList.add('connected');
-        connectionStatus.textContent = 'Connected to server';
-
-        // Prepare spawn options
-        const spawnOptions = {
-          cols: 120,
-          rows: 30,
-        };
-
-        if (modeSelect.value === 'docker') {
-          // Docker container mode
-          spawnOptions.container = containerInput.value;
-          spawnOptions.containerShell = shellInput.value;
-          if (userInput.value) {
-            spawnOptions.containerUser = userInput.value;
-          }
-        } else {
-          // Local shell mode
-          spawnOptions.shell = shellInput.value;
-        }
-
-        // Spawn session
-        const info = await terminal.spawn(spawnOptions);
-
-        // Update UI
-        disconnectBtn.disabled = false;
-        sessionInfo.style.display = 'flex';
-
-        if (info.container) {
-          sessionDetails.textContent = `Container: ${info.container} | Shell: ${info.shell}`;
-        } else {
-          sessionDetails.textContent = `Shell: ${info.shell} | CWD: ${info.cwd}`;
-        }
-
-        connectionStatus.textContent = info.container
-          ? `Connected to container: ${info.container}`
-          : 'Connected to local shell';
-
-      } catch (err) {
-        console.error('Connection error:', err);
-        connectionStatus.textContent = `Error: ${err.message}`;
-        connectionDot.classList.remove('connected');
-        connectBtn.disabled = false;
-      }
+    // Log events for debugging
+    terminal.addEventListener('connect', () => {
+      console.log('Connected to server');
     });
 
-    // Disconnect button
-    disconnectBtn.addEventListener('click', () => {
-      terminal.disconnect();
-      connectionDot.classList.remove('connected');
-      connectionStatus.textContent = 'Disconnected';
-      sessionInfo.style.display = 'none';
-      connectBtn.disabled = false;
-      disconnectBtn.disabled = true;
-    });
-
-    // Terminal events
     terminal.addEventListener('disconnect', () => {
-      connectionDot.classList.remove('connected');
-      connectionStatus.textContent = 'Disconnected';
-      sessionInfo.style.display = 'none';
-      connectBtn.disabled = false;
-      disconnectBtn.disabled = true;
+      console.log('Disconnected from server');
+    });
+
+    terminal.addEventListener('spawned', (e) => {
+      console.log('Session spawned:', e.detail.session);
     });
 
     terminal.addEventListener('exit', (e) => {
-      connectionStatus.textContent = `Session exited (code: ${e.detail.exitCode})`;
-      sessionInfo.style.display = 'none';
-      disconnectBtn.disabled = true;
+      console.log('Session exited with code:', e.detail.exitCode);
     });
 
     terminal.addEventListener('error', (e) => {
-      connectionStatus.textContent = `Error: ${e.detail.error.message}`;
+      console.error('Error:', e.detail.error);
+    });
+
+    terminal.addEventListener('theme-change', (e) => {
+      console.log('Theme changed to:', e.detail.theme);
     });
   </script>
 </body>

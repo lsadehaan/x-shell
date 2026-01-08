@@ -13,7 +13,10 @@ import type {
   TerminalOptions,
   TerminalMessage,
   SessionInfo,
+  ContainerInfo,
+  ServerInfo,
 } from '../shared/types.js';
+import { exec } from 'child_process';
 
 /**
  * Terminal session data
@@ -153,6 +156,9 @@ export class TerminalServer {
       return;
     }
 
+    // Send server info to client
+    this.sendServerInfo(ws);
+
     // Handle messages
     ws.on('message', (data) => {
       try {
@@ -203,6 +209,10 @@ export class TerminalServer {
         if (message.sessionId) {
           this.closeSession(message.sessionId);
         }
+        break;
+
+      case 'listContainers':
+        this.listContainers(ws);
         break;
 
       default:
@@ -591,6 +601,77 @@ export class TerminalServer {
       default:
         console.log(`${prefix} ${message}`);
     }
+  }
+
+  /**
+   * Send server info to client
+   */
+  private sendServerInfo(ws: WebSocket): void {
+    const info: ServerInfo = {
+      dockerEnabled: this.config.allowDockerExec,
+      allowedShells: this.config.allowedShells,
+      defaultShell: this.config.defaultShell,
+      defaultContainerShell: this.config.defaultContainerShell,
+    };
+
+    ws.send(JSON.stringify({
+      type: 'serverInfo',
+      info,
+    }));
+  }
+
+  /**
+   * List available Docker containers
+   */
+  private listContainers(ws: WebSocket): void {
+    if (!this.config.allowDockerExec) {
+      ws.send(JSON.stringify({
+        type: 'containerList',
+        containers: [],
+      }));
+      return;
+    }
+
+    // Run docker ps to get running containers
+    exec(
+      `${this.config.dockerPath} ps --format "{{.ID}}\\t{{.Names}}\\t{{.Image}}\\t{{.Status}}\\t{{.State}}"`,
+      (error, stdout, stderr) => {
+        if (error) {
+          this.log(`Failed to list containers: ${error.message}`, 'error');
+          ws.send(JSON.stringify({
+            type: 'containerList',
+            containers: [],
+          }));
+          return;
+        }
+
+        const containers: ContainerInfo[] = [];
+        const lines = stdout.trim().split('\n').filter(line => line.trim());
+
+        for (const line of lines) {
+          const [id, name, image, status, state] = line.split('\t');
+          if (!id) continue;
+
+          // Check if container matches allowed patterns
+          if (this.isContainerAllowed(name) || this.isContainerAllowed(id)) {
+            containers.push({
+              id,
+              name,
+              image,
+              status,
+              state: (state as ContainerInfo['state']) || 'unknown',
+            });
+          }
+        }
+
+        ws.send(JSON.stringify({
+          type: 'containerList',
+          containers,
+        }));
+
+        this.log(`Listed ${containers.length} containers`);
+      }
+    );
   }
 
   /**
