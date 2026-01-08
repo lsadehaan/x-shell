@@ -160,6 +160,12 @@ export class XShellTerminal extends LitElement {
   @property({ type: Boolean, attribute: 'auto-connect' }) autoConnect = false;
   @property({ type: Boolean, attribute: 'auto-spawn' }) autoSpawn = false;
 
+  // Docker container properties
+  @property({ type: String }) container = '';
+  @property({ type: String, attribute: 'container-shell' }) containerShell = '';
+  @property({ type: String, attribute: 'container-user' }) containerUser = '';
+  @property({ type: String, attribute: 'container-cwd' }) containerCwd = '';
+
   // Terminal appearance
   @property({ type: Number, attribute: 'font-size' }) fontSize = 14;
   @property({ type: String, attribute: 'font-family' }) fontFamily =
@@ -326,6 +332,11 @@ export class XShellTerminal extends LitElement {
         cols: this.terminal?.cols || this.cols,
         rows: this.terminal?.rows || this.rows,
         env: options?.env,
+        // Docker container options
+        container: options?.container || this.container || undefined,
+        containerShell: options?.containerShell || this.containerShell || undefined,
+        containerUser: options?.containerUser || this.containerUser || undefined,
+        containerCwd: options?.containerCwd || this.containerCwd || undefined,
       };
 
       const info = await this.client.spawn(spawnOptions);
@@ -508,7 +519,9 @@ export class XShellTerminal extends LitElement {
                 <span>Terminal</span>
                 ${this.sessionInfo
                   ? html`<span style="font-weight: normal; font-size: 12px; color: var(--xs-text-muted)">
-                      ${this.sessionInfo.shell}
+                      ${this.sessionInfo.container
+                        ? `${this.sessionInfo.container} (${this.sessionInfo.shell})`
+                        : this.sessionInfo.shell}
                     </span>`
                   : nothing}
               </div>

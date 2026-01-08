@@ -1,0 +1,13 @@
+{
+  "name": "x-shell-docker-example",
+  "version": "1.0.0",
+  "description": "Example: Connect to Docker containers with x-shell",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "x-shell.js": "file:../..",
+    "node-pty": "^1.0.0"
+  }
+}

@@ -16,6 +16,16 @@ export interface TerminalOptions {
   cols?: number;
   /** Initial rows (default: 24) */
   rows?: number;
+
+  // Docker container support
+  /** Docker container ID or name to exec into */
+  container?: string;
+  /** Shell to use inside the container (default: /bin/bash) */
+  containerShell?: string;
+  /** User to run as inside the container */
+  containerUser?: string;
+  /** Working directory inside the container */
+  containerCwd?: string;
 }
 
 /**
@@ -34,6 +44,14 @@ export interface ServerConfig {
   maxSessionsPerClient?: number;
   /** Session idle timeout in ms (0 = no timeout) */
   idleTimeout?: number;
+
+  // Docker container support
+  /** Enable Docker exec feature (default: false) */
+  allowDockerExec?: boolean;
+  /** Regex patterns for allowed container names/IDs (empty = all allowed when Docker exec is enabled) */
+  allowedContainerPatterns?: string[];
+  /** Default shell to use inside containers */
+  defaultContainerShell?: string;
 }
 
 /**
@@ -74,6 +92,8 @@ export interface SpawnedMessage extends BaseMessage {
   cwd: string;
   cols: number;
   rows: number;
+  /** Container ID if this is a Docker exec session */
+  container?: string;
 }
 
 /**
@@ -157,4 +177,6 @@ export interface SessionInfo {
   cols: number;
   rows: number;
   createdAt: Date;
+  /** Container ID if this is a Docker exec session */
+  container?: string;
 }

@@ -9,8 +9,9 @@ A plug-and-play terminal solution for web applications. Includes a server compon
 - **Server**: WebSocket server with node-pty for real shell sessions
 - **Client**: Lightweight WebSocket client with auto-reconnection
 - **UI**: `<x-shell-terminal>` Lit web component with xterm.js
+- **Docker**: Connect to Docker containers via `docker exec`
 - **Themes**: Built-in dark/light/auto theme support
-- **Security**: Configurable shell and path allowlists
+- **Security**: Configurable shell, path, and container allowlists
 - **Framework Agnostic**: Works with React, Vue, Angular, Svelte, or vanilla JS
 
 ## Installation
@@ -279,6 +280,91 @@ x-shell-terminal {
 }
 ```
 
+## Docker Container Support
+
+x-shell.js can connect to Docker containers, allowing you to exec into running containers directly from the browser.
+
+### Server Configuration
+
+```javascript
+const server = new TerminalServer({
+  // Enable Docker exec feature
+  allowDockerExec: true,
+
+  // Restrict which containers can be accessed (regex patterns)
+  allowedContainerPatterns: [
+    '^myapp-',           // Containers starting with 'myapp-'
+    '^dev-container$',   // Exact match
+    'backend',           // Contains 'backend'
+  ],
+
+  // Default shell for containers
+  defaultContainerShell: '/bin/bash',
+
+  // Path to Docker CLI (default: 'docker')
+  dockerPath: '/usr/bin/docker',
+
+  verbose: true,
+});
+```
+
+### Client Usage
+
+```javascript
+// Connect to a Docker container
+await client.spawn({
+  container: 'my-container-name',  // Container ID or name
+  containerShell: '/bin/sh',       // Shell inside container
+  containerUser: 'root',           // User to run as
+  containerCwd: '/app',            // Working directory in container
+  env: { DEBUG: 'true' },          // Environment variables
+});
+```
+
+### Web Component
+
+```html
+<x-shell-terminal
+  url="ws://localhost:3000/terminal"
+  container="my-container-name"
+  container-shell="/bin/bash"
+  container-user="node"
+  container-cwd="/app"
+  theme="dark"
+  auto-connect
+  auto-spawn
+></x-shell-terminal>
+```
+
+**Container Attributes:**
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `container` | string | Docker container ID or name |
+| `container-shell` | string | Shell to use inside container |
+| `container-user` | string | User to run as in container |
+| `container-cwd` | string | Working directory in container |
+
+### Security Considerations
+
+When enabling Docker exec:
+
+1. **Use allowedContainerPatterns** - Always restrict which containers can be accessed
+2. **Run x-shell server securely** - The server needs Docker socket access
+3. **Network isolation** - Consider running x-shell in the same Docker network
+4. **Audit logging** - Enable verbose mode in production for audit trails
+
+```javascript
+// Production Docker configuration
+const server = new TerminalServer({
+  allowDockerExec: true,
+  allowedContainerPatterns: ['^prod-app-'],  // Only production app containers
+  maxSessionsPerClient: 1,                    // One session at a time
+  idleTimeout: 5 * 60 * 1000,                // 5 minute timeout
+  verbose: true,                              // Log all activity
+});
+```
+
 ## Security
 
 **Always configure security for production:**
@@ -298,6 +384,12 @@ const server = new TerminalServer({
   idleTimeout: 10 * 60 * 1000, // 10 minutes
 });
 ```
+
+## Examples
+
+See the [examples](./examples) directory for complete working examples:
+
+- [**docker-container**](./examples/docker-container) - Connect to Docker containers from the browser
 
 ## License
 

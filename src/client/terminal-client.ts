@@ -183,6 +183,7 @@ export class TerminalClient {
           cols: message.cols,
           rows: message.rows,
           createdAt: new Date(),
+          container: message.container,
         };
         this.spawnedHandlers.forEach((handler) => handler(this.sessionInfo!));
         if (this.spawnResolve) {

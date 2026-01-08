@@ -28,6 +28,8 @@ interface TerminalSession {
   rows: number;
   createdAt: Date;
   lastActivity: Date;
+  /** Container ID if this is a Docker exec session */
+  container?: string;
 }
 
 /**
@@ -52,6 +54,8 @@ export interface TerminalServerOptions extends ServerConfig {
   port?: number;
   /** Enable verbose logging */
   verbose?: boolean;
+  /** Path to Docker CLI (default: 'docker') */
+  dockerPath?: string;
 }
 
 /**
@@ -74,6 +78,11 @@ export class TerminalServer {
       idleTimeout: options.idleTimeout || 30 * 60 * 1000, // 30 minutes
       path: options.path || '/terminal',
       verbose: options.verbose || false,
+      // Docker options
+      allowDockerExec: options.allowDockerExec || false,
+      allowedContainerPatterns: options.allowedContainerPatterns || [],
+      defaultContainerShell: options.defaultContainerShell || '/bin/bash',
+      dockerPath: options.dockerPath || 'docker',
     };
 
     // Start cleanup interval
@@ -233,15 +242,102 @@ export class TerminalServer {
   }
 
   /**
+   * Validate container name/ID against allowed patterns
+   */
+  private isContainerAllowed(container: string): boolean {
+    // Docker exec must be enabled
+    if (!this.config.allowDockerExec) return false;
+
+    // If no patterns specified, all containers allowed (when Docker exec is enabled)
+    if (this.config.allowedContainerPatterns.length === 0) return true;
+
+    // Check against allowed patterns
+    return this.config.allowedContainerPatterns.some((pattern) => {
+      try {
+        const regex = new RegExp(pattern);
+        return regex.test(container);
+      } catch {
+        // If pattern is invalid regex, treat as literal string match
+        return container === pattern || container.startsWith(pattern);
+      }
+    });
+  }
+
+  /**
+   * Spawn a Docker exec session
+   */
+  private spawnDockerSession(
+    ws: WebSocket,
+    options: TerminalOptions,
+    sessionId: string
+  ): TerminalSession | null {
+    const container = options.container!;
+    const shell = options.containerShell || this.config.defaultContainerShell;
+    const cols = options.cols || 80;
+    const rows = options.rows || 24;
+
+    // Build docker exec args
+    const args = ['exec', '-it'];
+
+    // Add user if specified
+    if (options.containerUser) {
+      args.push('-u', options.containerUser);
+    }
+
+    // Add working directory if specified
+    if (options.containerCwd) {
+      args.push('-w', options.containerCwd);
+    }
+
+    // Add environment variables
+    if (options.env) {
+      for (const [key, value] of Object.entries(options.env)) {
+        args.push('-e', `${key}=${value}`);
+      }
+    }
+
+    // Add container and shell
+    args.push(container, shell);
+
+    this.log(`Spawning Docker exec: ${this.config.dockerPath} ${args.join(' ')}`);
+
+    try {
+      // Spawn PTY with docker exec
+      const ptyProcess = this.pty.spawn(this.config.dockerPath, args, {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        env: process.env,
+      });
+
+      const now = new Date();
+
+      // Create session
+      const session: TerminalSession = {
+        id: sessionId,
+        pty: ptyProcess,
+        ws,
+        shell,
+        cwd: options.containerCwd || '/',
+        cols,
+        rows,
+        createdAt: now,
+        lastActivity: now,
+        container,
+      };
+
+      return session;
+    } catch (error) {
+      this.log(`Failed to spawn Docker exec: ${error}`, 'error');
+      this.sendError(ws, `Failed to exec into container: ${(error as Error).message}`, sessionId);
+      return null;
+    }
+  }
+
+  /**
    * Spawn a new terminal session
    */
   private spawnSession(ws: WebSocket, options: TerminalOptions): void {
-    const shell = options.shell || this.config.defaultShell;
-    const cwd = options.cwd || this.config.defaultCwd;
-    const cols = options.cols || 80;
-    const rows = options.rows || 24;
-    const env = options.env || {};
-
     // Count sessions for this client
     let clientSessions = 0;
     for (const session of this.sessions.values()) {
@@ -255,6 +351,50 @@ export class TerminalServer {
       );
       return;
     }
+
+    const sessionId = `term-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    // Check if this is a Docker exec request
+    if (options.container) {
+      // Validate container access
+      if (!this.isContainerAllowed(options.container)) {
+        this.sendError(
+          ws,
+          `Container access not allowed: ${options.container}. Docker exec ${this.config.allowDockerExec ? 'is enabled but container pattern not matched' : 'is disabled'}.`
+        );
+        return;
+      }
+
+      // Spawn Docker exec session
+      const session = this.spawnDockerSession(ws, options, sessionId);
+      if (!session) return;
+
+      this.sessions.set(sessionId, session);
+      this.setupSessionHandlers(session, ws, sessionId);
+
+      // Notify client
+      ws.send(
+        JSON.stringify({
+          type: 'spawned',
+          sessionId,
+          shell: session.shell,
+          cwd: session.cwd,
+          cols: session.cols,
+          rows: session.rows,
+          container: session.container,
+        })
+      );
+
+      this.log(`Docker session spawned: ${sessionId} (container: ${session.container})`);
+      return;
+    }
+
+    // Regular local shell session
+    const shell = options.shell || this.config.defaultShell;
+    const cwd = options.cwd || this.config.defaultCwd;
+    const cols = options.cols || 80;
+    const rows = options.rows || 24;
+    const env = options.env || {};
 
     // Validate shell
     if (!this.isShellAllowed(shell)) {
@@ -281,7 +421,6 @@ export class TerminalServer {
         env: { ...process.env, ...env },
       });
 
-      const sessionId = `term-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       const now = new Date();
 
       // Store session
@@ -298,30 +437,7 @@ export class TerminalServer {
       };
       this.sessions.set(sessionId, session);
 
-      // Handle PTY output
-      ptyProcess.onData((data: string) => {
-        session.lastActivity = new Date();
-        ws.send(
-          JSON.stringify({
-            type: 'data',
-            sessionId,
-            data,
-          })
-        );
-      });
-
-      // Handle PTY exit
-      ptyProcess.onExit(({ exitCode }: { exitCode: number }) => {
-        ws.send(
-          JSON.stringify({
-            type: 'exit',
-            sessionId,
-            exitCode,
-          })
-        );
-        this.sessions.delete(sessionId);
-        this.log(`Session exited: ${sessionId} (code: ${exitCode})`);
-      });
+      this.setupSessionHandlers(session, ws, sessionId);
 
       // Notify client
       ws.send(
@@ -340,6 +456,40 @@ export class TerminalServer {
       this.log(`Failed to spawn session: ${error}`, 'error');
       this.sendError(ws, (error as Error).message);
     }
+  }
+
+  /**
+   * Setup PTY event handlers for a session
+   */
+  private setupSessionHandlers(
+    session: TerminalSession,
+    ws: WebSocket,
+    sessionId: string
+  ): void {
+    // Handle PTY output
+    session.pty.onData((data: string) => {
+      session.lastActivity = new Date();
+      ws.send(
+        JSON.stringify({
+          type: 'data',
+          sessionId,
+          data,
+        })
+      );
+    });
+
+    // Handle PTY exit
+    session.pty.onExit(({ exitCode }: { exitCode: number }) => {
+      ws.send(
+        JSON.stringify({
+          type: 'exit',
+          sessionId,
+          exitCode,
+        })
+      );
+      this.sessions.delete(sessionId);
+      this.log(`Session exited: ${sessionId} (code: ${exitCode})`);
+    });
   }
 
   /**
@@ -454,6 +604,7 @@ export class TerminalServer {
       cols: session.cols,
       rows: session.rows,
       createdAt: session.createdAt,
+      container: session.container,
     }));
   }
 
