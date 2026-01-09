@@ -15,6 +15,12 @@
  * client.write('ls -la\n');
  * client.resize(120, 40);
  * client.kill();
+ *
+ * // Session multiplexing example
+ * const sessions = await client.listSessions();
+ * if (sessions.length > 0) {
+ *   await client.join({ sessionId: sessions[0].sessionId, requestHistory: true });
+ * }
  * ```
  */
 
@@ -25,6 +31,9 @@ import type {
   SessionInfo,
   ContainerInfo,
   ServerInfo,
+  SharedSessionInfo,
+  SessionListFilter,
+  JoinSessionOptions,
 } from '../shared/types.js';
 
 /**
@@ -33,7 +42,7 @@ import type {
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected';
 
 /**
- * Terminal client class
+ * Terminal client class with session multiplexing support
  */
 export class TerminalClient {
   private config: Required<ClientConfig>;
@@ -54,10 +63,20 @@ export class TerminalClient {
   private spawnedHandlers: ((info: SessionInfo) => void)[] = [];
   private serverInfoHandlers: ((info: ServerInfo) => void)[] = [];
   private containerListHandlers: ((containers: ContainerInfo[]) => void)[] = [];
+  // Session multiplexing handlers
+  private sessionListHandlers: ((sessions: SharedSessionInfo[]) => void)[] = [];
+  private joinedHandlers: ((session: SharedSessionInfo, history?: string) => void)[] = [];
+  private leftHandlers: ((sessionId: string) => void)[] = [];
+  private clientJoinedHandlers: ((sessionId: string, clientCount: number) => void)[] = [];
+  private clientLeftHandlers: ((sessionId: string, clientCount: number) => void)[] = [];
+  private sessionClosedHandlers: ((sessionId: string, reason: string) => void)[] = [];
 
-  // Promise resolvers for spawn
+  // Promise resolvers for spawn/join
   private spawnResolve: ((info: SessionInfo) => void) | null = null;
   private spawnReject: ((error: Error) => void) | null = null;
+  private joinResolve: ((info: SharedSessionInfo) => void) | null = null;
+  private joinReject: ((error: Error) => void) | null = null;
+  private listSessionsResolve: ((sessions: SharedSessionInfo[]) => void) | null = null;
 
   constructor(config: ClientConfig) {
     this.config = {
@@ -217,6 +236,11 @@ export class TerminalClient {
           this.spawnResolve = null;
           this.spawnReject = null;
         }
+        if (this.joinReject) {
+          this.joinReject(error);
+          this.joinResolve = null;
+          this.joinReject = null;
+        }
         break;
 
       case 'serverInfo':
@@ -226,6 +250,71 @@ export class TerminalClient {
 
       case 'containerList':
         this.containerListHandlers.forEach((handler) => handler(message.containers));
+        break;
+
+      // Session multiplexing messages
+      case 'sessionList':
+        this.sessionListHandlers.forEach((handler) =>
+          handler((message as any).sessions)
+        );
+        if (this.listSessionsResolve) {
+          this.listSessionsResolve((message as any).sessions);
+          this.listSessionsResolve = null;
+        }
+        break;
+
+      case 'joined':
+        const joinedSession = (message as any).session as SharedSessionInfo;
+        const history = (message as any).history as string | undefined;
+        this.sessionId = message.sessionId!;
+        this.sessionInfo = {
+          sessionId: joinedSession.sessionId,
+          shell: joinedSession.shell,
+          cwd: joinedSession.cwd,
+          cols: joinedSession.cols,
+          rows: joinedSession.rows,
+          createdAt: joinedSession.createdAt,
+          container: joinedSession.container,
+        };
+        this.joinedHandlers.forEach((handler) => handler(joinedSession, history));
+        if (this.joinResolve) {
+          this.joinResolve(joinedSession);
+          this.joinResolve = null;
+          this.joinReject = null;
+        }
+        break;
+
+      case 'left':
+        const leftSessionId = message.sessionId!;
+        if (this.sessionId === leftSessionId) {
+          this.sessionId = null;
+          this.sessionInfo = null;
+        }
+        this.leftHandlers.forEach((handler) => handler(leftSessionId));
+        break;
+
+      case 'clientJoined':
+        this.clientJoinedHandlers.forEach((handler) =>
+          handler(message.sessionId!, (message as any).clientCount)
+        );
+        break;
+
+      case 'clientLeft':
+        this.clientLeftHandlers.forEach((handler) =>
+          handler(message.sessionId!, (message as any).clientCount)
+        );
+        break;
+
+      case 'sessionClosed':
+        const closedSessionId = message.sessionId!;
+        const reason = (message as any).reason as string;
+        if (this.sessionId === closedSessionId) {
+          this.sessionId = null;
+          this.sessionInfo = null;
+        }
+        this.sessionClosedHandlers.forEach((handler) =>
+          handler(closedSessionId, reason)
+        );
         break;
     }
   }
@@ -241,7 +330,7 @@ export class TerminalClient {
       }
 
       if (this.sessionId) {
-        reject(new Error('Session already spawned. Call kill() first.'));
+        reject(new Error('Session already active. Call kill() or leave() first.'));
         return;
       }
 
@@ -305,7 +394,7 @@ export class TerminalClient {
   }
 
   /**
-   * Kill the terminal session
+   * Kill the terminal session (close and terminate)
    */
   kill(): void {
     if (!this.ws || this.state !== 'connected') {
@@ -325,6 +414,106 @@ export class TerminalClient {
 
     this.sessionId = null;
     this.sessionInfo = null;
+  }
+
+  // ==========================================
+  // Session Multiplexing Methods
+  // ==========================================
+
+  /**
+   * List available sessions
+   */
+  listSessions(filter?: SessionListFilter): Promise<SharedSessionInfo[]> {
+    return new Promise((resolve, reject) => {
+      if (this.state !== 'connected' || !this.ws) {
+        reject(new Error('Not connected to server'));
+        return;
+      }
+
+      this.listSessionsResolve = resolve;
+
+      this.ws.send(
+        JSON.stringify({
+          type: 'listSessions',
+          filter,
+        })
+      );
+    });
+  }
+
+  /**
+   * Join an existing session
+   */
+  join(options: JoinSessionOptions): Promise<SharedSessionInfo> {
+    return new Promise((resolve, reject) => {
+      if (this.state !== 'connected' || !this.ws) {
+        reject(new Error('Not connected to server'));
+        return;
+      }
+
+      if (this.sessionId) {
+        reject(new Error('Already in a session. Call leave() first.'));
+        return;
+      }
+
+      this.joinResolve = resolve;
+      this.joinReject = reject;
+
+      this.ws.send(
+        JSON.stringify({
+          type: 'join',
+          options,
+        })
+      );
+    });
+  }
+
+  /**
+   * Leave the current session without killing it
+   */
+  leave(sessionId?: string): void {
+    if (!this.ws || this.state !== 'connected') {
+      console.error('[x-shell] Cannot leave: not connected');
+      return;
+    }
+
+    const targetSession = sessionId || this.sessionId;
+    if (!targetSession) {
+      console.error('[x-shell] Cannot leave: no active session');
+      return;
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: 'leave',
+        sessionId: targetSession,
+      })
+    );
+
+    if (targetSession === this.sessionId) {
+      this.sessionId = null;
+      this.sessionInfo = null;
+    }
+  }
+
+  /**
+   * Request session list and trigger onSessionList handlers
+   * (Fire-and-forget version of listSessions)
+   */
+  requestSessionList(filter?: SessionListFilter): void {
+    this.listSessions(filter)
+      .then((sessions) => {
+        this.sessionListHandlers.forEach((handler) => {
+          try {
+            handler(sessions);
+          } catch (e) {
+            console.error('[x-shell] Error in sessionList handler:', e);
+          }
+        });
+      })
+      .catch((err) => {
+        console.error('[x-shell] Failed to list sessions:', err);
+      });
   }
 
   // ==========================================
@@ -389,6 +578,48 @@ export class TerminalClient {
    */
   onContainerList(handler: (containers: ContainerInfo[]) => void): void {
     this.containerListHandlers.push(handler);
+  }
+
+  /**
+   * Called when session list is received
+   */
+  onSessionList(handler: (sessions: SharedSessionInfo[]) => void): void {
+    this.sessionListHandlers.push(handler);
+  }
+
+  /**
+   * Called when successfully joined a session
+   */
+  onJoined(handler: (session: SharedSessionInfo, history?: string) => void): void {
+    this.joinedHandlers.push(handler);
+  }
+
+  /**
+   * Called when left a session
+   */
+  onLeft(handler: (sessionId: string) => void): void {
+    this.leftHandlers.push(handler);
+  }
+
+  /**
+   * Called when another client joins the current session
+   */
+  onClientJoined(handler: (sessionId: string, clientCount: number) => void): void {
+    this.clientJoinedHandlers.push(handler);
+  }
+
+  /**
+   * Called when another client leaves the current session
+   */
+  onClientLeft(handler: (sessionId: string, clientCount: number) => void): void {
+    this.clientLeftHandlers.push(handler);
+  }
+
+  /**
+   * Called when the session is closed by owner or orphan timeout
+   */
+  onSessionClosed(handler: (sessionId: string, reason: string) => void): void {
+    this.sessionClosedHandlers.push(handler);
   }
 
   /**

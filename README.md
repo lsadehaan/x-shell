@@ -9,7 +9,12 @@ A plug-and-play terminal solution for web applications. Includes a server compon
 - **Server**: WebSocket server with node-pty for real shell sessions
 - **Client**: Lightweight WebSocket client with auto-reconnection
 - **UI**: `<x-shell-terminal>` Lit web component with xterm.js
-- **Docker**: Connect to Docker containers via `docker exec`
+- **Tabbed Terminals**: Multiple terminal tabs in a single component
+- **Docker Exec**: Connect to Docker containers via `docker exec`
+- **Docker Attach**: Connect to a container's main process (PID 1)
+- **Session Multiplexing**: Multiple clients can share the same terminal session
+- **Session Persistence**: Sessions survive client disconnects with configurable timeout
+- **History Replay**: New clients receive recent terminal output when joining
 - **Themes**: Built-in dark/light/auto theme support
 - **Security**: Configurable shell, path, and container allowlists
 - **Framework Agnostic**: Works with React, Vue, Angular, Svelte, or vanilla JS
@@ -58,7 +63,7 @@ The UI component can be loaded directly from a CDN - no build step required:
 <script type="module" src="https://cdn.jsdelivr.net/npm/x-shell.js/dist/ui/browser-bundle.js"></script>
 
 <!-- Pin to a specific version -->
-<script type="module" src="https://unpkg.com/x-shell.js@1.0.0-rc.1/dist/ui/browser-bundle.js"></script>
+<script type="module" src="https://unpkg.com/x-shell.js@1.0.0/dist/ui/browser-bundle.js"></script>
 ```
 
 The bundle includes the `<x-shell-terminal>` web component with xterm.js built-in.
@@ -169,6 +174,13 @@ const server = new TerminalServer({
 
   // Enable verbose logging
   verbose: false,
+
+  // Session multiplexing options
+  maxClientsPerSession: 10,     // Max clients per session (default: 10)
+  orphanTimeout: 60000,         // Ms before orphaned sessions close (default: 60000)
+  historySize: 50000,           // History buffer size in chars (default: 50000)
+  historyEnabled: true,         // Enable history replay (default: true)
+  maxSessionsTotal: 100,        // Max concurrent sessions (default: 100)
 });
 
 // Attach to HTTP server
@@ -235,6 +247,20 @@ client.isConnected();      // boolean
 client.hasActiveSession(); // boolean
 client.getSessionId();     // string | null
 client.getSessionInfo();   // SessionInfo | null
+
+// Session multiplexing
+const sessions = await client.listSessions();  // List all sessions
+const session = await client.join({            // Join existing session
+  sessionId: 'term-123...',
+  requestHistory: true,
+  historyLimit: 50000,
+});
+client.leave();                                // Leave without killing
+
+// Multiplexing event handlers
+client.onClientJoined((sessionId, count) => console.log(`${count} clients`));
+client.onClientLeft((sessionId, count) => console.log(`${count} clients`));
+client.onSessionClosed((sessionId, reason) => console.log(reason));
 ```
 
 ### UI Component
@@ -278,6 +304,7 @@ client.getSessionInfo();   // SessionInfo | null
 | `show-connection-panel` | boolean | `false` | Show connection panel with container/shell selector |
 | `show-settings` | boolean | `false` | Show settings dropdown (theme, font size) |
 | `show-status-bar` | boolean | `false` | Show status bar with connection info and errors |
+| `show-tabs` | boolean | `false` | Enable tabbed terminal interface |
 
 **Methods:**
 
@@ -292,6 +319,11 @@ terminal.clear();             // Clear display
 terminal.write('text');       // Write to display
 terminal.writeln('line');     // Write line to display
 terminal.focus();             // Focus terminal
+
+// Tab methods (when show-tabs is enabled)
+terminal.createTab('label');  // Create new tab
+terminal.switchTab('tab-id'); // Switch to tab
+terminal.closeTab('tab-id');  // Close tab
 ```
 
 **Events:**
@@ -327,6 +359,68 @@ The connection panel automatically queries the server for:
   show-status-bar
 ></x-shell-terminal>
 ```
+
+## Tabbed Terminals
+
+Enable multiple terminal tabs within a single component using the `show-tabs` attribute:
+
+```html
+<x-shell-terminal
+  url="ws://localhost:3000/terminal"
+  show-tabs
+  show-connection-panel
+  show-settings
+  show-status-bar
+></x-shell-terminal>
+```
+
+### Features
+
+- **Independent Sessions**: Each tab has its own WebSocket connection and terminal session
+- **Tab Bar**: Shows all open tabs with status indicators
+- **Dynamic Labels**: Tabs automatically update their label to show the shell or container name
+- **Session Joining**: Create a tab and join an existing session from another tab
+- **Easy Management**: Click "+" to add tabs, "×" to close, click tab to switch
+
+### Tab API
+
+```javascript
+const terminal = document.querySelector('x-shell-terminal');
+
+// Create a new tab
+const tab = terminal.createTab('My Terminal');
+// Returns: { id: 'tab-1', label: 'My Terminal', ... }
+
+// Switch to a specific tab
+terminal.switchTab('tab-1');
+
+// Close a tab (resources are cleaned up automatically)
+terminal.closeTab('tab-1');
+
+// Access tab state
+// Each tab maintains its own: client, terminal, sessionInfo, etc.
+```
+
+### Use Cases
+
+**1. Multi-Environment Development**
+```html
+<!-- Open tabs for different containers -->
+<x-shell-terminal show-tabs show-connection-panel></x-shell-terminal>
+```
+- Tab 1: Local shell for git operations
+- Tab 2: Docker container for backend
+- Tab 3: Docker container for frontend
+
+**2. Session Sharing**
+- Create a session in Tab 1
+- Create Tab 2, select "Join Existing Session"
+- Both tabs now mirror the same terminal
+
+**3. Monitoring Multiple Processes**
+- Open multiple tabs
+- Each tab connects to a different running session
+- Monitor all processes from a single interface
 
 ## Theming
 
@@ -436,6 +530,178 @@ const server = new TerminalServer({
 });
 ```
 
+### Docker Attach Mode
+
+Docker attach connects to a container's main process (PID 1) instead of spawning a new shell. This is useful for:
+- Interacting with interactive containers started with `docker run -it`
+- Debugging container startup issues
+- Sharing a session with `docker attach` from another terminal
+
+```javascript
+// Client: Attach to container's main process
+await client.spawn({
+  container: 'my-container',
+  attachMode: true,  // Use docker attach instead of docker exec
+});
+```
+
+**Important:** Docker attach connects to whatever is running as PID 1. If the container was started with a non-interactive command (like a web server), attach may not provide useful interaction.
+
+```bash
+# Start an interactive container first
+docker run -it --name demo alpine sh
+
+# Then attach via x-shell
+# Both terminals now share the same shell session
+```
+
+## Session Multiplexing
+
+Session multiplexing allows multiple clients to connect to the same terminal session. This enables:
+- **Collaboration**: Multiple users can share a terminal
+- **Session Persistence**: Sessions survive client disconnects
+- **History Replay**: New clients receive recent output when joining
+- **Monitoring**: Watch others' terminal sessions in real-time
+
+### How It Works
+
+```
+┌──────────┐     ┌─────────────────────────────────────────┐     ┌──────────┐
+│ Client A │◄────┤           SessionManager                 ├────►│   PTY    │
+└──────────┘     │  ┌─────────────────────────────────────┐ │     │ Process  │
+                 │  │         SharedSession                │ │     └──────────┘
+┌──────────┐     │  │  - clients: [A, B, C]               │ │
+│ Client B │◄────┼──┤  - historyBuffer (50KB)             │ │
+└──────────┘     │  │  - orphanedAt: null                 │ │
+                 │  └─────────────────────────────────────┘ │
+┌──────────┐     │                                         │
+│ Client C │◄────┼─────────────────────────────────────────┘
+└──────────┘              (broadcast output)
+```
+
+### Server Configuration
+
+```javascript
+const server = new TerminalServer({
+  // Maximum clients that can join a single session
+  maxClientsPerSession: 10,
+
+  // Time before orphaned session is killed (ms)
+  // Set to 0 to kill immediately on last client disconnect
+  orphanTimeout: 60000,
+
+  // History buffer size for replay on join
+  historySize: 50000,
+
+  // Enable/disable history feature
+  historyEnabled: true,
+
+  // Maximum total sessions across all clients
+  maxSessionsTotal: 100,
+});
+
+// Get session statistics
+const stats = server.getStats();
+// { sessionCount: 5, clientCount: 12, orphanedCount: 1 }
+
+// List all sessions with multiplexing info
+const sessions = server.getSharedSessions();
+```
+
+### Client API
+
+```javascript
+// List available sessions
+const sessions = await client.listSessions();
+// Filter by type or container
+const dockerSessions = await client.listSessions({ type: 'docker-exec' });
+
+// Create a shareable session
+await client.spawn({
+  shell: '/bin/bash',
+  label: 'dev-session',      // Optional label for identification
+  allowJoin: true,           // Allow others to join (default: true)
+  enableHistory: true,       // Enable history buffer (default: true)
+});
+
+// Join an existing session
+const session = await client.join({
+  sessionId: 'term-abc123...',
+  requestHistory: true,      // Request output history
+  historyLimit: 50000,       // Max history chars to receive
+});
+// session.history contains recent output
+
+// Leave session without killing it
+client.leave();
+// Session survives if other clients connected
+// Or waits orphanTimeout before closing
+
+// Kill session (only owner can do this)
+client.kill();
+```
+
+### Spawn Options for Multiplexing
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `label` | string | - | Session label for identification |
+| `allowJoin` | boolean | `true` | Allow other clients to join |
+| `enableHistory` | boolean | `true` | Enable history buffer |
+| `attachMode` | boolean | `false` | Use docker attach instead of exec |
+
+### Event Handlers
+
+```javascript
+// Called when another client joins your session
+client.onClientJoined((sessionId, clientCount) => {
+  console.log(`Client joined, ${clientCount} total`);
+});
+
+// Called when another client leaves
+client.onClientLeft((sessionId, clientCount) => {
+  console.log(`Client left, ${clientCount} remaining`);
+});
+
+// Called when session is closed
+client.onSessionClosed((sessionId, reason) => {
+  // reason: 'orphan_timeout' | 'owner_closed' | 'process_exit' | 'error'
+  console.log(`Session closed: ${reason}`);
+});
+```
+
+### Use Cases
+
+**1. Pair Programming**
+```javascript
+// Developer A creates session
+await client.spawn({ label: 'pair-session' });
+// Share session ID with Developer B
+// Developer B joins with history
+await client.join({ sessionId, requestHistory: true });
+```
+
+**2. Session Persistence**
+```javascript
+// Start long-running task
+await client.spawn({ shell: '/bin/bash' });
+client.write('npm run build\n');
+client.disconnect(); // Session survives!
+
+// Later, reconnect
+await client.connect();
+const sessions = await client.listSessions();
+await client.join({ sessionId: sessions[0].sessionId, requestHistory: true });
+// See build output that happened while disconnected
+```
+
+**3. Monitoring**
+```javascript
+// Admin joins session in read-only mode
+await client.join({ sessionId, requestHistory: true });
+// Watch activity without interfering
+```
+
 ## Security
 
 **Always configure security for production:**
@@ -461,6 +727,7 @@ const server = new TerminalServer({
 See the [examples](./examples) directory for complete working examples:
 
 - [**docker-container**](./examples/docker-container) - Connect to Docker containers from the browser
+- [**multiplexing**](./examples/multiplexing) - Session multiplexing with multiple clients sharing terminals
 
 ### Running Locally (Development)
 

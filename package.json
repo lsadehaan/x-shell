@@ -1,6 +1,6 @@
 {
   "name": "x-shell.js",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "WebSocket-based terminal for Node.js - the truth is in your shell",
   "type": "module",
   "main": "dist/server/index.js",
@@ -34,6 +34,7 @@
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
@@ -42,7 +43,8 @@
     "watch": "tsc --watch",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build",
-    "test": "echo \"Tests coming soon\" && exit 0"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [
     "terminal",
@@ -79,6 +81,7 @@
     "esbuild": "^0.19.0",
     "node-pty": "^1.1.0",
     "typescript": "^5.3.0",
+    "vitest": "^4.0.16",
     "xterm": "^5.3.0"
   },
   "peerDependencies": {

@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "x-shell"
+version = "1.0.0"
+description = "Python client for x-shell WebSocket terminal servers"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "x-shell contributors"}
+]
+keywords = ["terminal", "websocket", "pty", "shell", "docker"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Shells",
+    "Topic :: Terminals",
+    "Framework :: AsyncIO",
+]
+dependencies = [
+    "websockets>=11.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+
+[project.urls]
+Homepage = "https://github.com/lsadehaan/x-shell"
+Documentation = "https://github.com/lsadehaan/x-shell#readme"
+Repository = "https://github.com/lsadehaan/x-shell"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["x_shell*"]

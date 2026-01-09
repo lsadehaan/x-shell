@@ -8,4 +8,8 @@ export type {
   ClientConfig,
   TerminalOptions,
   SessionInfo,
+  SharedSessionInfo,
+  SessionType,
+  SessionListFilter,
+  JoinSessionOptions,
 } from '../shared/types.js';

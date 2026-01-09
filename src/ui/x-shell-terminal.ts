@@ -19,7 +19,7 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sharedStyles, buttonStyles, themeStyles } from './styles.js';
 import { TerminalClient } from '../client/terminal-client.js';
-import type { TerminalOptions, SessionInfo, ContainerInfo, ServerInfo } from '../shared/types.js';
+import type { TerminalOptions, SessionInfo, ContainerInfo, ServerInfo, SharedSessionInfo } from '../shared/types.js';
 
 // xterm.js types (loaded dynamically)
 interface ITerminalOptions {
@@ -54,6 +54,20 @@ interface ITerminal {
 interface IFitAddon {
   fit(): void;
   proposeDimensions(): { cols: number; rows: number } | undefined;
+}
+
+// Tab interface for multi-tab support
+interface Tab {
+  id: string;
+  label: string;
+  client: TerminalClient | null;
+  terminal: ITerminal | null;
+  fitAddon: IFitAddon | null;
+  connected: boolean;
+  sessionActive: boolean;
+  sessionInfo: SessionInfo | null;
+  clientCount: number;
+  containerEl: HTMLElement | null;
 }
 
 @customElement('x-shell-terminal')
@@ -294,6 +308,135 @@ export class XShellTerminal extends LitElement {
       .status-bar-success {
         color: var(--xs-status-connected);
       }
+
+      /* Tab bar styles */
+      .tab-bar {
+        display: flex;
+        align-items: center;
+        background: var(--xs-bg-header);
+        border-bottom: 1px solid var(--xs-border);
+        padding: 0 4px;
+        gap: 2px;
+        min-height: 32px;
+        overflow-x: auto;
+      }
+
+      .tab-bar::-webkit-scrollbar {
+        height: 4px;
+      }
+
+      .tab-bar::-webkit-scrollbar-thumb {
+        background: var(--xs-border);
+        border-radius: 2px;
+      }
+
+      .tab {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        background: transparent;
+        border: none;
+        border-bottom: 2px solid transparent;
+        color: var(--xs-text-muted);
+        font-size: 12px;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: all 0.15s ease;
+      }
+
+      .tab:hover {
+        background: var(--xs-btn-hover);
+        color: var(--xs-text);
+      }
+
+      .tab.active {
+        color: var(--xs-text);
+        border-bottom-color: var(--xs-status-connected);
+        background: var(--xs-bg);
+      }
+
+      .tab-status {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--xs-status-disconnected);
+      }
+
+      .tab-status.connected {
+        background: var(--xs-status-connected);
+      }
+
+      .tab-close {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        border-radius: 3px;
+        background: none;
+        border: none;
+        color: var(--xs-text-muted);
+        font-size: 14px;
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.15s ease;
+      }
+
+      .tab:hover .tab-close {
+        opacity: 1;
+      }
+
+      .tab-close:hover {
+        background: var(--xs-btn-hover);
+        color: var(--xs-text);
+      }
+
+      .tab-add {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 4px;
+        background: none;
+        border: none;
+        color: var(--xs-text-muted);
+        font-size: 18px;
+        cursor: pointer;
+        margin-left: 4px;
+      }
+
+      .tab-add:hover {
+        background: var(--xs-btn-hover);
+        color: var(--xs-text);
+      }
+
+      /* Multi-terminal container */
+      .terminals-wrapper {
+        flex: 1;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .tab-terminal-container {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        padding: 4px;
+        background: var(--xs-terminal-bg);
+        display: none;
+      }
+
+      .tab-terminal-container.active {
+        display: block;
+      }
+
+      .tab-terminal-container .xterm {
+        height: 100%;
+      }
     `,
   ];
 
@@ -318,6 +461,7 @@ export class XShellTerminal extends LitElement {
   @property({ type: Boolean, attribute: 'show-connection-panel' }) showConnectionPanel = false;
   @property({ type: Boolean, attribute: 'show-settings' }) showSettings = false;
   @property({ type: Boolean, attribute: 'show-status-bar' }) showStatusBar = false;
+  @property({ type: Boolean, attribute: 'show-tabs' }) showTabs = false;
 
   // Terminal appearance
   @property({ type: Number, attribute: 'font-size' }) fontSize = 14;
@@ -339,7 +483,12 @@ export class XShellTerminal extends LitElement {
   @state() private serverInfo: ServerInfo | null = null;
   @state() private selectedContainer = '';
   @state() private selectedShell = '/bin/sh';
-  @state() private connectionMode: 'local' | 'docker' = 'docker';
+  @state() private connectionMode: 'local' | 'docker' | 'join' = 'local';
+
+  // Session multiplexing state
+  @state() private availableSessions: SharedSessionInfo[] = [];
+  @state() private selectedSessionId = '';
+  @state() private clientCount = 1;
 
   // Settings state
   @state() private settingsMenuOpen = false;
@@ -348,6 +497,11 @@ export class XShellTerminal extends LitElement {
   @state() private statusMessage = '';
   @state() private statusType: 'info' | 'error' | 'success' = 'info';
 
+  // Tab state
+  @state() private tabs: Tab[] = [];
+  @state() private activeTabId = '';
+  private tabCounter = 0;
+
   // xterm.js module (loaded dynamically)
   private xtermModule: any = null;
   private fitAddonModule: any = null;
@@ -355,6 +509,11 @@ export class XShellTerminal extends LitElement {
 
   override connectedCallback() {
     super.connectedCallback();
+
+    // Create initial tab if tabs are enabled
+    if (this.showTabs && this.tabs.length === 0) {
+      this.createTab();
+    }
 
     if (this.autoConnect && this.url) {
       this.connect();
@@ -460,18 +619,46 @@ export class XShellTerminal extends LitElement {
         );
       });
 
+      // Capture reference to this client for use in closures
+      const client = this.client;
+
       this.client.onData((data) => {
-        if (this.terminal) {
+        // Find the terminal that belongs to this client (for multi-tab support)
+        if (this.showTabs) {
+          const tab = this.tabs.find((t) => t.client === client);
+          if (tab?.terminal) {
+            tab.terminal.write(data);
+          }
+        } else if (this.terminal) {
           this.terminal.write(data);
         }
       });
 
       this.client.onExit((code) => {
-        this.sessionActive = false;
-        this.sessionInfo = null;
-        if (this.terminal) {
-          this.terminal.writeln('');
-          this.terminal.writeln(`\x1b[1;33m[Process exited with code: ${code}]\x1b[0m`);
+        // Find the tab that belongs to this client
+        if (this.showTabs) {
+          const tab = this.tabs.find((t) => t.client === client);
+          if (tab) {
+            tab.sessionActive = false;
+            tab.sessionInfo = null;
+            if (tab.terminal) {
+              tab.terminal.writeln('');
+              tab.terminal.writeln(`\x1b[1;33m[Process exited with code: ${code}]\x1b[0m`);
+            }
+            // Update component state if this is the active tab
+            if (tab.id === this.activeTabId) {
+              this.sessionActive = false;
+              this.sessionInfo = null;
+            }
+            this.tabs = [...this.tabs]; // Trigger re-render
+          }
+        } else {
+          this.sessionActive = false;
+          this.sessionInfo = null;
+          if (this.terminal) {
+            this.terminal.writeln('');
+            this.terminal.writeln(`\x1b[1;33m[Process exited with code: ${code}]\x1b[0m`);
+          }
         }
         this.dispatchEvent(
           new CustomEvent('exit', { detail: { exitCode: code }, bubbles: true, composed: true })
@@ -479,6 +666,17 @@ export class XShellTerminal extends LitElement {
       });
 
       this.client.onSpawned((info) => {
+        // Update tab-specific state
+        if (this.showTabs) {
+          const tab = this.tabs.find((t) => t.client === client);
+          if (tab) {
+            tab.sessionInfo = info;
+            tab.sessionActive = true;
+            // Update label to show shell/container
+            tab.label = info.container || info.shell.split('/').pop() || 'Terminal';
+            this.tabs = [...this.tabs];
+          }
+        }
         this.sessionInfo = info;
         this.setStatus(`Session started: ${info.container || info.shell}`, 'success');
         this.dispatchEvent(
@@ -503,7 +701,68 @@ export class XShellTerminal extends LitElement {
         }
       });
 
+      // Multiplexing event handlers
+      this.client.onSessionList((sessions) => {
+        this.availableSessions = sessions;
+        if (sessions.length > 0 && !this.selectedSessionId) {
+          this.selectedSessionId = sessions[0].sessionId;
+        }
+      });
+
+      this.client.onClientJoined((sessionId, count) => {
+        // Update tab-specific state
+        if (this.showTabs) {
+          const tab = this.tabs.find((t) => t.client === client);
+          if (tab) {
+            tab.clientCount = count;
+            this.tabs = [...this.tabs];
+          }
+        }
+        this.clientCount = count;
+        this.setStatus(`Client joined (${count} total)`, 'info');
+      });
+
+      this.client.onClientLeft((sessionId, count) => {
+        // Update tab-specific state
+        if (this.showTabs) {
+          const tab = this.tabs.find((t) => t.client === client);
+          if (tab) {
+            tab.clientCount = count;
+            this.tabs = [...this.tabs];
+          }
+        }
+        this.clientCount = count;
+        this.setStatus(`Client left (${count} remaining)`, 'info');
+      });
+
+      this.client.onSessionClosed((sessionId, reason) => {
+        // Update tab-specific state
+        if (this.showTabs) {
+          const tab = this.tabs.find((t) => t.client === client && t.sessionInfo?.sessionId === sessionId);
+          if (tab) {
+            tab.sessionActive = false;
+            tab.sessionInfo = null;
+            this.tabs = [...this.tabs];
+          }
+        }
+        if (this.sessionInfo?.sessionId === sessionId) {
+          this.sessionActive = false;
+          this.sessionInfo = null;
+          this.setStatus(`Session closed: ${reason}`, 'info');
+        }
+        // Refresh session list
+        client.requestSessionList();
+      });
+
       await this.client.connect();
+
+      // Request session list after connecting
+      this.client.requestSessionList();
+
+      // Sync state to active tab
+      if (this.showTabs) {
+        this.syncStateToActiveTab();
+      }
     } catch (err) {
       this.error = err instanceof Error ? err.message : 'Connection failed';
     } finally {
@@ -556,6 +815,14 @@ export class XShellTerminal extends LitElement {
       this.sessionActive = true;
       this.sessionInfo = info;
 
+      // Sync state to active tab
+      if (this.showTabs) {
+        this.syncStateToActiveTab();
+      }
+
+      // Refresh session list so other tabs can see this session
+      this.client.requestSessionList();
+
       // Focus terminal
       if (this.terminal) {
         this.terminal.focus();
@@ -579,7 +846,13 @@ export class XShellTerminal extends LitElement {
     await this.loadXterm();
     await this.updateComplete;
 
-    const container = this.shadowRoot?.querySelector('.terminal-container');
+    // Get the correct container (either single terminal or tab-specific)
+    let container: Element | null = null;
+    if (this.showTabs && this.activeTabId) {
+      container = this.shadowRoot?.querySelector(`.tab-terminal-container[data-tab-id="${this.activeTabId}"]`) ?? null;
+    } else {
+      container = this.shadowRoot?.querySelector('.terminal-container') ?? null;
+    }
     if (!container) return;
 
     // Get theme colors
@@ -624,13 +897,26 @@ export class XShellTerminal extends LitElement {
       }
     });
 
-    // Setup resize observer
-    this.resizeObserver = new ResizeObserver(() => {
-      if (this.fitAddon) {
-        this.fitAddon.fit();
-      }
-    });
+    // Setup resize observer for this container
+    if (!this.resizeObserver) {
+      this.resizeObserver = new ResizeObserver(() => {
+        // Fit all visible terminals
+        if (this.showTabs) {
+          const activeTab = this.getActiveTab();
+          if (activeTab?.fitAddon) {
+            activeTab.fitAddon.fit();
+          }
+        } else if (this.fitAddon) {
+          this.fitAddon.fit();
+        }
+      });
+    }
     this.resizeObserver.observe(container);
+
+    // Sync to active tab if in tab mode
+    if (this.showTabs) {
+      this.syncStateToActiveTab();
+    }
   }
 
   /**
@@ -734,6 +1020,169 @@ export class XShellTerminal extends LitElement {
     this.fitAddon = null;
   }
 
+  // ==================== Tab Management Methods ====================
+
+  /**
+   * Get the active tab
+   */
+  private getActiveTab(): Tab | undefined {
+    return this.tabs.find((t) => t.id === this.activeTabId);
+  }
+
+  /**
+   * Create a new tab
+   */
+  createTab(label?: string): Tab {
+    this.tabCounter++;
+    const tab: Tab = {
+      id: `tab-${this.tabCounter}`,
+      label: label || `Terminal ${this.tabCounter}`,
+      client: null,
+      terminal: null,
+      fitAddon: null,
+      connected: false,
+      sessionActive: false,
+      sessionInfo: null,
+      clientCount: 1,
+      containerEl: null,
+    };
+
+    this.tabs = [...this.tabs, tab];
+
+    // Switch to the new tab
+    this.switchTab(tab.id);
+
+    return tab;
+  }
+
+  /**
+   * Switch to a tab
+   */
+  switchTab(tabId: string): void {
+    const tab = this.tabs.find((t) => t.id === tabId);
+    if (!tab) return;
+
+    this.activeTabId = tabId;
+
+    // Sync state from tab to component (for backward compatibility with single-terminal code)
+    this.client = tab.client;
+    this.terminal = tab.terminal;
+    this.fitAddon = tab.fitAddon;
+    this.connected = tab.connected;
+    this.sessionActive = tab.sessionActive;
+    this.sessionInfo = tab.sessionInfo;
+    this.clientCount = tab.clientCount;
+
+    // Focus the terminal and fit it
+    this.updateComplete.then(() => {
+      if (tab.terminal) {
+        tab.terminal.focus();
+      }
+      if (tab.fitAddon) {
+        tab.fitAddon.fit();
+      }
+    });
+  }
+
+  /**
+   * Close a tab
+   */
+  closeTab(tabId: string): void {
+    const tabIndex = this.tabs.findIndex((t) => t.id === tabId);
+    if (tabIndex === -1) return;
+
+    const tab = this.tabs[tabIndex];
+
+    // Cleanup tab resources
+    if (tab.terminal) {
+      tab.terminal.dispose();
+    }
+    if (tab.client) {
+      tab.client.disconnect();
+    }
+
+    // Remove tab
+    this.tabs = this.tabs.filter((t) => t.id !== tabId);
+
+    // If we closed the active tab, switch to another
+    if (this.activeTabId === tabId && this.tabs.length > 0) {
+      // Switch to previous tab, or first if we were first
+      const newIndex = Math.max(0, tabIndex - 1);
+      this.switchTab(this.tabs[newIndex].id);
+    }
+
+    // If no tabs left, clear state
+    if (this.tabs.length === 0) {
+      this.activeTabId = '';
+      this.client = null;
+      this.terminal = null;
+      this.fitAddon = null;
+      this.connected = false;
+      this.sessionActive = false;
+      this.sessionInfo = null;
+    }
+  }
+
+  /**
+   * Update the active tab's state from component state
+   */
+  private syncStateToActiveTab(): void {
+    const tab = this.getActiveTab();
+    if (tab) {
+      tab.client = this.client;
+      tab.terminal = this.terminal;
+      tab.fitAddon = this.fitAddon;
+      tab.connected = this.connected;
+      tab.sessionActive = this.sessionActive;
+      tab.sessionInfo = this.sessionInfo;
+      tab.clientCount = this.clientCount;
+      // Trigger re-render
+      this.tabs = [...this.tabs];
+    }
+  }
+
+  /**
+   * Render the tab bar
+   */
+  private renderTabBar() {
+    if (!this.showTabs) return nothing;
+
+    return html`
+      <div class="tab-bar">
+        ${this.tabs.map(
+          (tab) => html`
+            <button
+              class="tab ${tab.id === this.activeTabId ? 'active' : ''}"
+              @click=${() => this.switchTab(tab.id)}
+            >
+              <span class="tab-status ${tab.sessionActive ? 'connected' : ''}"></span>
+              <span>${tab.label}</span>
+              ${this.tabs.length > 1
+                ? html`
+                    <button
+                      class="tab-close"
+                      @click=${(e: Event) => {
+                        e.stopPropagation();
+                        this.closeTab(tab.id);
+                      }}
+                      title="Close tab"
+                    >
+                      ×
+                    </button>
+                  `
+                : nothing}
+            </button>
+          `
+        )}
+        <button class="tab-add" @click=${() => this.createTab()} title="New tab">
+          +
+        </button>
+      </div>
+    `;
+  }
+
+  // ==================== End Tab Management Methods ====================
+
   /**
    * Set status message
    */
@@ -805,10 +1254,88 @@ export class XShellTerminal extends LitElement {
    */
   private handleModeChange(e: Event): void {
     const select = e.target as HTMLSelectElement;
-    this.connectionMode = select.value as 'local' | 'docker';
+    this.connectionMode = select.value as 'local' | 'docker' | 'join';
 
     if (this.connectionMode === 'docker' && this.client && this.connected) {
       this.client.requestContainerList();
+    }
+    if (this.connectionMode === 'join' && this.client && this.connected) {
+      this.client.requestSessionList();
+    }
+  }
+
+  /**
+   * Refresh session list
+   */
+  private refreshSessions(): void {
+    if (this.client && this.connected) {
+      this.client.requestSessionList();
+    }
+  }
+
+  /**
+   * Join an existing session
+   */
+  async join(sessionId: string, requestHistory = true): Promise<SharedSessionInfo> {
+    if (!this.client || !this.connected) {
+      throw new Error('Not connected to server');
+    }
+
+    this.loading = true;
+    this.error = null;
+
+    try {
+      // Initialize terminal UI if needed
+      await this.initTerminalUI();
+
+      const session = await this.client.join({
+        sessionId,
+        requestHistory,
+        historyLimit: 50000,
+      });
+
+      this.sessionActive = true;
+      this.sessionInfo = {
+        sessionId: session.sessionId,
+        shell: session.shell,
+        cwd: session.cwd,
+        cols: session.cols,
+        rows: session.rows,
+        createdAt: session.createdAt || new Date(),
+        container: session.container,
+      };
+      this.clientCount = session.clientCount;
+
+      // Sync state to active tab
+      if (this.showTabs) {
+        this.syncStateToActiveTab();
+      }
+
+      this.setStatus(`Joined session (${session.clientCount} clients)`, 'success');
+
+      // Focus terminal
+      if (this.terminal) {
+        this.terminal.focus();
+      }
+
+      return session;
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to join session';
+      throw err;
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  /**
+   * Leave current session without killing it
+   */
+  leave(): void {
+    if (this.client && this.sessionInfo) {
+      this.client.leave(this.sessionInfo.sessionId);
+      this.sessionActive = false;
+      this.sessionInfo = null;
+      this.setStatus('Left session', 'info');
     }
   }
 
@@ -821,16 +1348,22 @@ export class XShellTerminal extends LitElement {
     }
 
     if (this.connected) {
-      const options: TerminalOptions = {};
-
-      if (this.connectionMode === 'docker' && this.selectedContainer) {
-        options.container = this.selectedContainer;
-        options.containerShell = this.selectedShell || '/bin/sh';
+      if (this.connectionMode === 'join' && this.selectedSessionId) {
+        // Join existing session
+        await this.join(this.selectedSessionId);
       } else {
-        options.shell = this.selectedShell || undefined;
-      }
+        // Spawn new session
+        const options: TerminalOptions = {};
 
-      await this.spawn(options);
+        if (this.connectionMode === 'docker' && this.selectedContainer) {
+          options.container = this.selectedContainer;
+          options.containerShell = this.selectedShell || '/bin/sh';
+        } else {
+          options.shell = this.selectedShell || undefined;
+        }
+
+        await this.spawn(options);
+      }
     }
   }
 
@@ -848,13 +1381,17 @@ export class XShellTerminal extends LitElement {
     if (!this.showConnectionPanel) return nothing;
 
     const runningContainers = this.containers.filter(c => c.state === 'running');
+    const acceptingSessions = this.availableSessions.filter(s => s.accepting);
 
     return html`
       <div class="connection-panel">
         <div class="connection-panel-title">
           <span>Connection</span>
+          ${this.availableSessions.length > 0
+            ? html`<span style="font-size: 11px; color: var(--xs-status-connected);">${this.availableSessions.length} session(s) available</span>`
+            : nothing}
           ${this.serverInfo?.dockerEnabled
-            ? html`<span style="font-size: 11px; color: var(--xs-status-connected);">Docker enabled</span>`
+            ? html`<span style="font-size: 11px; color: var(--xs-text-muted);">Docker enabled</span>`
             : nothing}
         </div>
         <div class="connection-form">
@@ -865,14 +1402,43 @@ export class XShellTerminal extends LitElement {
               @change=${this.handleModeChange}
               ?disabled=${this.sessionActive}
             >
-              <option value="local">Local Shell</option>
+              <option value="local">New Local Shell</option>
               ${this.serverInfo?.dockerEnabled
-                ? html`<option value="docker">Docker Container</option>`
+                ? html`<option value="docker">New Docker Session</option>`
+                : nothing}
+              ${acceptingSessions.length > 0
+                ? html`<option value="join">Join Existing Session</option>`
                 : nothing}
             </select>
           </div>
 
-          ${this.connectionMode === 'docker' ? html`
+          ${this.connectionMode === 'join' ? html`
+            <div class="form-group">
+              <label style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Session</span>
+                <button
+                  style="font-size: 10px; padding: 2px 6px;"
+                  @click=${this.refreshSessions}
+                  ?disabled=${!this.connected}
+                >Refresh</button>
+              </label>
+              <select
+                .value=${this.selectedSessionId}
+                @change=${(e: Event) => this.selectedSessionId = (e.target as HTMLSelectElement).value}
+                ?disabled=${this.sessionActive}
+              >
+                ${acceptingSessions.length === 0
+                  ? html`<option value="">No sessions available</option>`
+                  : acceptingSessions.map(s => html`
+                      <option value=${s.sessionId}>
+                        ${s.label || s.sessionId.substring(0, 12)}
+                        (${s.type === 'local' ? s.shell : s.container || s.type})
+                        - ${s.clientCount} client(s)
+                      </option>
+                    `)}
+              </select>
+            </div>
+          ` : this.connectionMode === 'docker' ? html`
             <div class="form-group">
               <label>Container</label>
               <select
@@ -889,22 +1455,24 @@ export class XShellTerminal extends LitElement {
             </div>
           ` : nothing}
 
-          <div class="form-group">
-            <label>Shell</label>
-            <select
-              .value=${this.selectedShell}
-              @change=${(e: Event) => this.selectedShell = (e.target as HTMLSelectElement).value}
-              ?disabled=${this.sessionActive}
-            >
-              ${this.serverInfo?.allowedShells.length
-                ? this.serverInfo.allowedShells.map(s => html`<option value=${s}>${s}</option>`)
-                : html`
-                    <option value="/bin/bash">/bin/bash</option>
-                    <option value="/bin/sh">/bin/sh</option>
-                    <option value="/bin/zsh">/bin/zsh</option>
-                  `}
-            </select>
-          </div>
+          ${this.connectionMode !== 'join' ? html`
+            <div class="form-group">
+              <label>Shell</label>
+              <select
+                .value=${this.selectedShell}
+                @change=${(e: Event) => this.selectedShell = (e.target as HTMLSelectElement).value}
+                ?disabled=${this.sessionActive}
+              >
+                ${this.serverInfo?.allowedShells.length
+                  ? this.serverInfo.allowedShells.map(s => html`<option value=${s}>${s}</option>`)
+                  : html`
+                      <option value="/bin/bash">/bin/bash</option>
+                      <option value="/bin/sh">/bin/sh</option>
+                      <option value="/bin/zsh">/bin/zsh</option>
+                    `}
+              </select>
+            </div>
+          ` : nothing}
 
           <div class="form-group">
             ${!this.connected
@@ -912,11 +1480,11 @@ export class XShellTerminal extends LitElement {
                   ${this.loading ? 'Connecting...' : 'Connect'}
                 </button>`
               : !this.sessionActive
-              ? html`<button class="btn-primary" @click=${this.handlePanelConnect} ?disabled=${this.loading}>
-                  ${this.loading ? 'Starting...' : 'Start Session'}
+              ? html`<button class="btn-primary" @click=${this.handlePanelConnect} ?disabled=${this.loading || (this.connectionMode === 'join' && !this.selectedSessionId)}>
+                  ${this.loading ? 'Starting...' : this.connectionMode === 'join' ? 'Join Session' : 'Start Session'}
                 </button>`
               : html`<button class="btn-danger" @click=${this.kill}>
-                  Stop Session
+                  ${this.clientCount > 1 ? 'Leave Session' : 'Stop Session'}
                 </button>`}
           </div>
         </div>
@@ -1051,14 +1619,36 @@ export class XShellTerminal extends LitElement {
           `}
 
       ${this.renderConnectionPanel()}
+      ${this.renderTabBar()}
 
-      <div class="terminal-container">
-        ${this.loading && !this.terminal
-          ? html`<div class="loading"><span class="loading-spinner">⏳</span> Loading...</div>`
-          : this.error && !this.terminal
-          ? html`<div class="error">❌ ${this.error}</div>`
-          : nothing}
-      </div>
+      ${this.showTabs && this.tabs.length > 0
+        ? html`
+            <div class="terminals-wrapper">
+              ${this.tabs.map(
+                (tab) => html`
+                  <div
+                    class="tab-terminal-container ${tab.id === this.activeTabId ? 'active' : ''}"
+                    data-tab-id=${tab.id}
+                  >
+                    ${this.loading && tab.id === this.activeTabId && !tab.terminal
+                      ? html`<div class="loading"><span class="loading-spinner">⏳</span> Loading...</div>`
+                      : this.error && tab.id === this.activeTabId && !tab.terminal
+                      ? html`<div class="error">❌ ${this.error}</div>`
+                      : nothing}
+                  </div>
+                `
+              )}
+            </div>
+          `
+        : html`
+            <div class="terminal-container">
+              ${this.loading && !this.terminal
+                ? html`<div class="loading"><span class="loading-spinner">⏳</span> Loading...</div>`
+                : this.error && !this.terminal
+                ? html`<div class="error">❌ ${this.error}</div>`
+                : nothing}
+            </div>
+          `}
 
       ${this.renderStatusBar()}
     `;

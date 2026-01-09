@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>x-shell Session Multiplexing Example</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+    h1 { margin: 0 0 8px; font-size: 24px; color: #38bdf8; }
+    .subtitle { margin: 0 0 20px; font-size: 14px; color: #64748b; }
+    .container { max-width: 1200px; margin: 0 auto; }
+    .terminal-wrapper {
+      height: 600px;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    x-shell-terminal { height: 100%; }
+    .info {
+      margin-top: 20px;
+      padding: 15px;
+      background: #1e293b;
+      border-radius: 8px;
+      border: 1px solid #334155;
+    }
+    .info h3 { margin: 0 0 10px; font-size: 14px; color: #38bdf8; }
+    .info p { margin: 0; font-size: 13px; color: #94a3b8; line-height: 1.6; }
+    .info code {
+      background: #0f172a;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: monospace;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>x-shell Session Multiplexing</h1>
+    <p class="subtitle">Share terminal sessions between multiple browser tabs, with tabbed terminals</p>
+
+    <div class="terminal-wrapper">
+      <x-shell-terminal
+        id="terminal"
+        theme="dark"
+        show-connection-panel
+        show-settings
+        show-status-bar
+        show-tabs
+      ></x-shell-terminal>
+    </div>
+
+    <div class="info">
+      <h3>How to Test Multiplexing</h3>
+      <p>
+        1. Select <code>New Local Shell</code> and click <code>Start Session</code><br>
+        2. Run some commands to generate output<br>
+        3. Open this page in a second browser tab<br>
+        4. In tab 2, select <code>Join Existing Session</code> from the Mode dropdown<br>
+        5. Select the session and click <code>Join Session</code><br>
+        6. Both tabs now share the same terminal!<br>
+        <br>
+        <strong>Tip:</strong> Close tab 1 - the session survives! Tab 2 can continue using it.
+      </p>
+    </div>
+  </div>
+
+  <script type="module" src="/dist/ui/browser-bundle.js"></script>
+  <script type="module">
+    const terminal = document.getElementById('terminal');
+
+    // Set WebSocket URL dynamically
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    terminal.url = `${wsProtocol}//${window.location.host}/terminal`;
+
+    // Connect on load
+    terminal.connect().catch(err => console.error('Connection failed:', err));
+
+    // Log events
+    terminal.addEventListener('connect', () => console.log('Connected'));
+    terminal.addEventListener('spawned', (e) => console.log('Session:', e.detail.session));
+    terminal.addEventListener('exit', (e) => console.log('Exit code:', e.detail.exitCode));
+  </script>
+</body>
+</html>
