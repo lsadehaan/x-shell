@@ -1,0 +1,16 @@
+version: 1
+updated_at: '2026-01-09T03:50:22.534115'
+workspace: /var/cloud-code/workspaces/lsadehaan-x-shell.worktrees/task-bc55a65a-0809-4593-a9c7-df53ea26b9e6
+tasks:
+- id: bc55a65a-0809-4593-a9c7-df53ea26b9e6
+  title: AUTH
+  status: assigned
+  priority: medium
+  branch: cloud-code/issue-1
+  description: Add pluggable AUTH feature
+  acceptance_criteria: []
+  context:
+    related_files: []
+    dependencies: []
+  depends_on: []
+  workspace_mode: shared

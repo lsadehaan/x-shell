@@ -34,6 +34,7 @@ import type {
   SharedSessionInfo,
   SessionListFilter,
   JoinSessionOptions,
+  UserContext,
 } from '../shared/types.js';
 
 /**
@@ -54,6 +55,11 @@ export class TerminalClient {
   private reconnectAttempts = 0;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
+  // Authentication state
+  private isAuthenticated = false;
+  private userContext: UserContext | null = null;
+  private authRequired = false;
+
   // Event handlers
   private connectHandlers: (() => void)[] = [];
   private disconnectHandlers: (() => void)[] = [];
@@ -70,6 +76,9 @@ export class TerminalClient {
   private clientJoinedHandlers: ((sessionId: string, clientCount: number) => void)[] = [];
   private clientLeftHandlers: ((sessionId: string, clientCount: number) => void)[] = [];
   private sessionClosedHandlers: ((sessionId: string, reason: string) => void)[] = [];
+  // Authentication handlers
+  private authResponseHandlers: ((success: boolean, error?: string, user?: UserContext) => void)[] = [];
+  private permissionDeniedHandlers: ((operation: string, error: string) => void)[] = [];
 
   // Promise resolvers for spawn/join
   private spawnResolve: ((info: SessionInfo) => void) | null = null;
@@ -84,6 +93,10 @@ export class TerminalClient {
       reconnect: config.reconnect ?? true,
       maxReconnectAttempts: config.maxReconnectAttempts ?? 10,
       reconnectDelay: config.reconnectDelay ?? 1000,
+      // Authentication options
+      authToken: config.authToken,
+      authHeaders: config.authHeaders,
+      authData: config.authData,
     };
   }
 
@@ -100,7 +113,12 @@ export class TerminalClient {
       this.state = 'connecting';
 
       try {
-        this.ws = new WebSocket(this.config.url);
+        // Build WebSocket URL with auth token if provided
+        const url = this.buildWebSocketUrl();
+
+        // Create WebSocket with auth headers if provided
+        const headers = this.buildAuthHeaders();
+        this.ws = new WebSocket(url, [], headers ? { headers } : undefined);
       } catch (error) {
         this.state = 'disconnected';
         reject(error);
@@ -119,6 +137,11 @@ export class TerminalClient {
         this.state = 'disconnected';
         this.sessionId = null;
         this.sessionInfo = null;
+
+        // Reset auth state
+        this.isAuthenticated = false;
+        this.userContext = null;
+        this.authRequired = false;
 
         if (wasConnected) {
           this.disconnectHandlers.forEach((handler) => handler());
@@ -164,6 +187,11 @@ export class TerminalClient {
     this.state = 'disconnected';
     this.sessionId = null;
     this.sessionInfo = null;
+
+    // Reset auth state
+    this.isAuthenticated = false;
+    this.userContext = null;
+    this.authRequired = false;
   }
 
   /**
@@ -245,6 +273,17 @@ export class TerminalClient {
 
       case 'serverInfo':
         this.serverInfo = message.info;
+
+        // Check auth status from server info
+        const serverInfoExtended = message.info as any;
+        if (serverInfoExtended.authEnabled) {
+          this.authRequired = serverInfoExtended.requireAuth || false;
+          if (serverInfoExtended.user) {
+            this.isAuthenticated = true;
+            this.userContext = serverInfoExtended.user;
+          }
+        }
+
         this.serverInfoHandlers.forEach((handler) => handler(message.info));
         break;
 
@@ -314,6 +353,24 @@ export class TerminalClient {
         }
         this.sessionClosedHandlers.forEach((handler) =>
           handler(closedSessionId, reason)
+        );
+        break;
+
+      case 'authResponse':
+        const authResponse = message as any;
+        if (authResponse.success && authResponse.user) {
+          this.isAuthenticated = true;
+          this.userContext = authResponse.user;
+        }
+        this.authResponseHandlers.forEach((handler) =>
+          handler(authResponse.success, authResponse.error, authResponse.user)
+        );
+        break;
+
+      case 'permissionDenied':
+        const permissionDenied = message as any;
+        this.permissionDeniedHandlers.forEach((handler) =>
+          handler(permissionDenied.operation, permissionDenied.error)
         );
         break;
     }
@@ -678,5 +735,124 @@ export class TerminalClient {
    */
   getServerInfo(): ServerInfo | null {
     return this.serverInfo;
+  }
+
+  // ===========================================================================
+  // Authentication Methods
+  // ===========================================================================
+
+  /**
+   * Get current user context
+   */
+  getUserContext(): UserContext | null {
+    return this.userContext;
+  }
+
+  /**
+   * Check if client is authenticated
+   */
+  isAuth(): boolean {
+    return this.isAuthenticated;
+  }
+
+  /**
+   * Send authentication credentials
+   */
+  authenticate(token?: string, data?: Record<string, any>): Promise<UserContext> {
+    return new Promise((resolve, reject) => {
+      if (!this.ws || this.state !== 'connected') {
+        reject(new Error('Not connected'));
+        return;
+      }
+
+      // Set up one-time auth response handler
+      const handleAuthResponse = (success: boolean, error?: string, user?: UserContext) => {
+        this.offAuthResponse(handleAuthResponse);
+        if (success && user) {
+          this.isAuthenticated = true;
+          this.userContext = user;
+          resolve(user);
+        } else {
+          reject(new Error(error || 'Authentication failed'));
+        }
+      };
+
+      this.onAuthResponse(handleAuthResponse);
+
+      // Send auth message
+      this.send({
+        type: 'auth',
+        token: token || this.config.authToken,
+        headers: this.config.authHeaders,
+        data: data || this.config.authData,
+      });
+    });
+  }
+
+  /**
+   * Register auth response event handler
+   */
+  onAuthResponse(handler: (success: boolean, error?: string, user?: UserContext) => void): void {
+    this.authResponseHandlers.push(handler);
+  }
+
+  /**
+   * Unregister auth response event handler
+   */
+  offAuthResponse(handler: (success: boolean, error?: string, user?: UserContext) => void): void {
+    const index = this.authResponseHandlers.indexOf(handler);
+    if (index >= 0) {
+      this.authResponseHandlers.splice(index, 1);
+    }
+  }
+
+  /**
+   * Register permission denied event handler
+   */
+  onPermissionDenied(handler: (operation: string, error: string) => void): void {
+    this.permissionDeniedHandlers.push(handler);
+  }
+
+  /**
+   * Unregister permission denied event handler
+   */
+  offPermissionDenied(handler: (operation: string, error: string) => void): void {
+    const index = this.permissionDeniedHandlers.indexOf(handler);
+    if (index >= 0) {
+      this.permissionDeniedHandlers.splice(index, 1);
+    }
+  }
+
+  /**
+   * Build WebSocket URL with auth token if needed
+   */
+  private buildWebSocketUrl(): string {
+    if (!this.config.authToken) {
+      return this.config.url;
+    }
+
+    // Add token as query parameter for connection-time auth
+    const url = new URL(this.config.url);
+    url.searchParams.set('token', this.config.authToken);
+    return url.toString();
+  }
+
+  /**
+   * Build auth headers for WebSocket connection
+   */
+  private buildAuthHeaders(): Record<string, string> | null {
+    const headers: Record<string, string> = {};
+
+    // Add Authorization header if token is provided
+    if (this.config.authToken) {
+      headers.Authorization = `Bearer ${this.config.authToken}`;
+    }
+
+    // Add custom auth headers
+    if (this.config.authHeaders) {
+      Object.assign(headers, this.config.authHeaders);
+    }
+
+    return Object.keys(headers).length > 0 ? headers : null;
   }
 }
