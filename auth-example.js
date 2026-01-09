@@ -4,9 +4,9 @@
  * This example demonstrates how to set up authentication for x-shell.js
  */
 
-const express = require('express');
-const { createServer } = require('http');
-const { TerminalServer, SimpleAuthProvider, PERMISSIONS } = require('./dist/server/index.js');
+import express from 'express';
+import { createServer } from 'http';
+import { TerminalServer, SimpleAuthProvider, PERMISSIONS } from './dist/server/index.js';
 
 const app = express();
 const server = createServer(app);
@@ -163,29 +163,29 @@ app.get('/', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(\`
-🚀 x-shell.js Authentication Demo running on port \${PORT}
+  console.log(`
+🚀 x-shell.js Authentication Demo running on port ${PORT}
 
-Open http://localhost:\${PORT} in your browser to test authentication.
+Open http://localhost:${PORT} in your browser to test authentication.
 
 API Endpoints:
-- WebSocket: ws://localhost:\${PORT}/terminal
-- Web Interface: http://localhost:\${PORT}
+- WebSocket: ws://localhost:${PORT}/terminal
+- Web Interface: http://localhost:${PORT}
 
 Authentication:
 - Use Bearer tokens in Authorization header
-- Or pass 'token' query parameter: ws://localhost:\${PORT}/terminal?token=admin
+- Or pass 'token' query parameter: ws://localhost:${PORT}/terminal?token=admin
 - Or send auth message after connecting
 
 Example client usage:
   const client = new TerminalClient({
-    url: 'ws://localhost:\${PORT}/terminal',
+    url: 'ws://localhost:${PORT}/terminal',
     authToken: 'admin'
   });
   await client.connect();
   const user = client.getUserContext();
   console.log('Authenticated as:', user.username);
-\`);
+`);
 });
 
 // Graceful shutdown

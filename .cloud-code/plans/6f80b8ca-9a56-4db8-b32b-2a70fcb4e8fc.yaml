@@ -1,0 +1,59 @@
+version: 1
+task_id: 6f80b8ca-9a56-4db8-b32b-2a70fcb4e8fc
+created_at: '2026-01-09T15:25:09.097325'
+phase: plan_complete
+issue:
+  number: 1
+  title: AUTH
+  url: https://github.com/lsadehaan/x-shell/issues/1
+  body: Add pluggable AUTH feature
+  labels:
+  - cloud-code
+  created_at: null
+task:
+  title: 'Implement: AUTH'
+  type: feature
+  short_description: Add pluggable AUTH feature
+  detailed_description: Add pluggable AUTH feature
+  difficulty: easy
+  difficulty_reasoning: Straightforward task with clear requirements
+completion_criteria:
+- criterion: New files created and functional
+  verification: All new files exist and are properly integrated
+- criterion: Existing files updated correctly
+  verification: Changes compile and don't break existing functionality
+- criterion: Tests pass
+  verification: pytest runs successfully with no failures
+blast_radius:
+  files_to_create:
+  - path: src/new_feature.py
+    purpose: Main implementation file
+  files_to_modify:
+  - path: src/main.py
+    changes: Wire up new feature
+  files_to_delete: []
+  potential_side_effects: []
+guidance:
+  architecture_notes: 'Task: AUTH
+
+
+    Implement according to existing patterns in the codebase.'
+  implementation_steps:
+  - step: 1
+    title: Understand existing code
+    details: Read and understand the files that will be modified
+  - step: 2
+    title: Implement core changes
+    details: 'Implement the main functionality: AUTH'
+  - step: 3
+    title: Write tests
+    details: Add tests to verify the implementation
+  - step: 4
+    title: Verify and clean up
+    details: Run tests, fix any issues, clean up code
+references: []
+context:
+  related_files:
+  - path: src/main.py
+    reason: 'Will be modified: Wire up new feature'
+  dependencies: []

@@ -94,9 +94,9 @@ export class TerminalClient {
       maxReconnectAttempts: config.maxReconnectAttempts ?? 10,
       reconnectDelay: config.reconnectDelay ?? 1000,
       // Authentication options
-      authToken: config.authToken,
-      authHeaders: config.authHeaders,
-      authData: config.authData,
+      authToken: config.authToken || '',
+      authHeaders: config.authHeaders || {},
+      authData: config.authData || {},
     };
   }
 
@@ -118,7 +118,7 @@ export class TerminalClient {
 
         // Create WebSocket with auth headers if provided
         const headers = this.buildAuthHeaders();
-        this.ws = new WebSocket(url, [], headers ? { headers } : undefined);
+        this.ws = new WebSocket(url);
       } catch (error) {
         this.state = 'disconnected';
         reject(error);
@@ -780,12 +780,12 @@ export class TerminalClient {
       this.onAuthResponse(handleAuthResponse);
 
       // Send auth message
-      this.send({
+      this.ws.send(JSON.stringify({
         type: 'auth',
         token: token || this.config.authToken,
         headers: this.config.authHeaders,
         data: data || this.config.authData,
-      });
+      }));
     });
   }
 

@@ -104,6 +104,7 @@ export class TerminalServer {
       historyEnabled: options.historyEnabled ?? true,
       maxSessionsTotal: options.maxSessionsTotal || 100,
       // Authentication options (add defaults)
+      authProvider: options.authProvider || null,
       requireAuth: options.requireAuth ?? false,
       allowAnonymous: options.allowAnonymous ?? true,
     };

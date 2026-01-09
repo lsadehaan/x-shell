@@ -72,6 +72,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@types/jsonwebtoken": "^9.0.10",
     "lit": "^3.3.2",
     "ws": "^8.14.0"
   },
@@ -85,7 +86,8 @@
     "xterm": "^5.3.0"
   },
   "peerDependencies": {
-    "express": "^4.18.0 || ^5.0.0",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
     "node-pty": "1"
   },
   "peerDependenciesMeta": {
@@ -93,6 +95,9 @@
       "optional": true
     },
     "node-pty": {
+      "optional": true
+    },
+    "jsonwebtoken": {
       "optional": true
     }
   }

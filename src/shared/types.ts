@@ -70,7 +70,7 @@ export interface ServerConfig {
 
   // Authentication
   /** Authentication provider instance */
-  authProvider?: AuthProvider;
+  authProvider?: AuthProvider | null;
   /** Require authentication for all connections (default: false) */
   requireAuth?: boolean;
   /** Allow unauthenticated connections with limited permissions (default: true when authProvider is set) */

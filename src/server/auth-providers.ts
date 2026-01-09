@@ -165,7 +165,8 @@ export class JWTAuthProvider implements AuthProvider {
     if (this.jwtVerify) return;
 
     try {
-      const jwt = await import('jsonwebtoken');
+      // Dynamic import with proper typing
+      const jwt = await import('jsonwebtoken') as any;
       this.jwtVerify = jwt.verify;
     } catch (error) {
       throw new Error('jsonwebtoken is required for JWTAuthProvider. Install it with: npm install jsonwebtoken');
