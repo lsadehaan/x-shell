@@ -20,6 +20,10 @@ import type {
   SharedSessionInfo,
   SessionListFilter,
   JoinSessionOptions,
+  AuthProvider,
+  UserContext,
+  AuthContext,
+  PermissionRequest,
 } from '../shared/types.js';
 import { exec } from 'child_process';
 import { SessionManager, SessionManagerConfig, SharedSession } from './session-manager.js';
@@ -73,6 +77,11 @@ export class TerminalServer {
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   private clientIds = new WeakMap<WebSocket, string>();
 
+  // Authentication state
+  private authProvider: AuthProvider | null = null;
+  private clientUsers = new Map<string, UserContext>(); // clientId -> UserContext
+  private authPendingClients = new Set<string>(); // Clients waiting for auth
+
   constructor(options: TerminalServerOptions = {}) {
     this.config = {
       allowedShells: options.allowedShells || [getDefaultShell()],
@@ -94,7 +103,14 @@ export class TerminalServer {
       historySize: options.historySize || 50000,
       historyEnabled: options.historyEnabled ?? true,
       maxSessionsTotal: options.maxSessionsTotal || 100,
+      // Authentication options (add defaults)
+      authProvider: options.authProvider || null,
+      requireAuth: options.requireAuth ?? false,
+      allowAnonymous: options.allowAnonymous ?? true,
     };
+
+    // Set up authentication
+    this.authProvider = options.authProvider || null;
 
     // Initialize session manager
     this.sessionManager = new SessionManager({
@@ -202,14 +218,50 @@ export class TerminalServer {
       return;
     }
 
-    // Send server info to client
-    this.sendServerInfo(ws);
+    // Try authentication if provider is configured
+    let user: UserContext | null = null;
+    if (this.authProvider) {
+      try {
+        user = await this.authenticateConnection(ws, req);
+        if (!user && this.config.requireAuth) {
+          // Auth required but failed, wait for auth message
+          this.authPendingClients.add(clientId);
+          this.log(`Client ${clientId} pending authentication`);
+        }
+      } catch (error) {
+        if (this.config.requireAuth) {
+          this.sendAuthResponse(ws, false, (error as Error).message);
+          ws.close();
+          return;
+        }
+        this.log(`Authentication failed for ${clientId}: ${(error as Error).message}`);
+      }
+    } else if (this.config.requireAuth) {
+      // Auth required but no provider
+      this.sendError(ws, 'Authentication is required but no provider configured');
+      ws.close();
+      return;
+    }
+
+    // Store user context if authenticated
+    if (user) {
+      this.clientUsers.set(clientId, user);
+      this.log(`Client ${clientId} authenticated as ${user.username || user.userId}`);
+    } else if (!this.config.allowAnonymous && this.authProvider) {
+      // Anonymous not allowed
+      this.sendAuthResponse(ws, false, 'Anonymous access not permitted');
+      ws.close();
+      return;
+    }
+
+    // Send server info to client (includes auth status)
+    this.sendServerInfo(ws, user);
 
     // Handle messages
-    ws.on('message', (data) => {
+    ws.on('message', async (data) => {
       try {
         const message = JSON.parse(data.toString()) as TerminalMessage;
-        this.handleMessage(ws, clientId, message);
+        await this.handleMessage(ws, clientId, message);
       } catch (error) {
         this.log(`Invalid message: ${error}`, 'error');
       }
@@ -217,6 +269,19 @@ export class TerminalServer {
 
     ws.on('close', () => {
       this.log(`Client ${clientId} disconnected`);
+
+      // Clean up auth state
+      this.authPendingClients.delete(clientId);
+      const user = this.clientUsers.get(clientId);
+      this.clientUsers.delete(clientId);
+
+      // Call auth provider disconnect handler
+      if (user && this.authProvider?.onDisconnect) {
+        this.authProvider.onDisconnect(user).catch(err => {
+          this.log(`Auth provider disconnect handler error: ${err.message}`, 'error');
+        });
+      }
+
       // Remove client from all sessions (sessions may survive if other clients connected)
       const affectedSessions = this.sessionManager.removeClientFromAllSessions(clientId);
       if (affectedSessions.length > 0) {
@@ -232,7 +297,24 @@ export class TerminalServer {
   /**
    * Handle message from client
    */
-  private handleMessage(ws: WebSocket, clientId: string, message: TerminalMessage): void {
+  private async handleMessage(ws: WebSocket, clientId: string, message: TerminalMessage): Promise<void> {
+    // Handle authentication message first
+    if (message.type === 'auth') {
+      await this.handleAuthMessage(ws, clientId, message as any);
+      return;
+    }
+
+    // Check if client needs authentication
+    if (this.authPendingClients.has(clientId)) {
+      this.sendAuthResponse(ws, false, 'Authentication required before other operations');
+      return;
+    }
+
+    // Check authorization for all other operations (except auth)
+    if (!(await this.checkPermission(clientId, message))) {
+      return; // checkPermission sends the permission denied message
+    }
+
     switch (message.type) {
       case 'spawn':
         this.spawnSession(ws, clientId, message.options || {});
@@ -898,24 +980,6 @@ export class TerminalServer {
     }
   }
 
-  /**
-   * Send server info to client
-   */
-  private sendServerInfo(ws: WebSocket): void {
-    const info: ServerInfo = {
-      dockerEnabled: this.config.allowDockerExec,
-      allowedShells: this.config.allowedShells,
-      defaultShell: this.config.defaultShell,
-      defaultContainerShell: this.config.defaultContainerShell,
-    };
-
-    ws.send(
-      JSON.stringify({
-        type: 'serverInfo',
-        info,
-      })
-    );
-  }
 
   /**
    * List available Docker containers
@@ -1028,6 +1092,259 @@ export class TerminalServer {
     }
 
     this.log('Terminal server closed');
+  }
+
+  // ===========================================================================
+  // Authentication Methods
+  // ===========================================================================
+
+  /**
+   * Authenticate a WebSocket connection using auth provider
+   */
+  private async authenticateConnection(ws: WebSocket, req: any): Promise<UserContext | null> {
+    if (!this.authProvider || !this.authProvider.authenticateConnection) {
+      return null;
+    }
+
+    const context: AuthContext = {
+      request: req,
+      websocket: ws,
+      clientIp: req.socket.remoteAddress || req.headers['x-forwarded-for'],
+      userAgent: req.headers['user-agent'],
+    };
+
+    const result = await this.authProvider.authenticateConnection(context);
+    return result.success ? result.user! : null;
+  }
+
+  /**
+   * Handle authentication message from client
+   */
+  private async handleAuthMessage(ws: WebSocket, clientId: string, message: any): Promise<void> {
+    if (!this.authProvider || !this.authProvider.authenticateCredentials) {
+      this.sendAuthResponse(ws, false, 'Authentication not supported');
+      return;
+    }
+
+    try {
+      const result = await this.authProvider.authenticateCredentials(message);
+      if (result.success && result.user) {
+        // Authentication successful
+        this.clientUsers.set(clientId, result.user);
+        this.authPendingClients.delete(clientId);
+        this.log(`Client ${clientId} authenticated as ${result.user.username || result.user.userId}`);
+
+        // Send updated server info with user context
+        this.sendServerInfo(ws, result.user);
+        this.sendAuthResponse(ws, true, undefined, result.user);
+      } else {
+        // Authentication failed
+        this.sendAuthResponse(ws, false, result.error || 'Authentication failed');
+        if (this.config.requireAuth) {
+          ws.close();
+        }
+      }
+    } catch (error) {
+      this.sendAuthResponse(ws, false, (error as Error).message);
+      if (this.config.requireAuth) {
+        ws.close();
+      }
+    }
+  }
+
+  /**
+   * Check if user has permission for the operation
+   */
+  private async checkPermission(clientId: string, message: TerminalMessage): Promise<boolean> {
+    // If no auth provider, allow all operations (backward compatibility)
+    if (!this.authProvider) {
+      return true;
+    }
+
+    // Get user context (could be null for anonymous users)
+    let user = this.clientUsers.get(clientId);
+
+    // If no user context and anonymous not allowed, deny
+    if (!user && !this.config.allowAnonymous) {
+      this.sendPermissionDenied(clientId, message.type, 'Authentication required');
+      return false;
+    }
+
+    // Create anonymous user context if needed
+    if (!user && this.config.allowAnonymous) {
+      const anonymousPermissions = this.authProvider.getAnonymousPermissions?.() || [];
+      user = {
+        userId: 'anonymous',
+        username: 'Anonymous',
+        permissions: anonymousPermissions,
+      };
+    }
+
+    if (!user) {
+      this.sendPermissionDenied(clientId, message.type, 'User context not found');
+      return false;
+    }
+
+    // Map message types to operations
+    const operation = this.getOperationFromMessage(message);
+    const resource = this.getResourceFromMessage(message);
+
+    const permissionRequest: PermissionRequest = {
+      user,
+      operation,
+      resource,
+      context: {
+        message,
+        clientId,
+      },
+    };
+
+    try {
+      const hasPermission = await this.authProvider.checkPermission(permissionRequest);
+      if (!hasPermission) {
+        this.sendPermissionDenied(clientId, message.type, `Permission denied for ${operation}`, operation);
+      }
+      return hasPermission;
+    } catch (error) {
+      this.log(`Permission check error: ${(error as Error).message}`, 'error');
+      this.sendPermissionDenied(clientId, message.type, 'Permission check failed');
+      return false;
+    }
+  }
+
+  /**
+   * Map message type to operation string
+   */
+  private getOperationFromMessage(message: TerminalMessage): string {
+    switch (message.type) {
+      case 'spawn':
+        return 'spawn_session';
+      case 'data':
+        return 'write_session';
+      case 'resize':
+        return 'resize_session';
+      case 'close':
+        return 'close_session';
+      case 'join':
+        return 'join_session';
+      case 'leave':
+        return 'leave_session';
+      case 'listSessions':
+        return 'list_sessions';
+      case 'listContainers':
+        return 'list_containers';
+      default:
+        return message.type;
+    }
+  }
+
+  /**
+   * Extract resource identifier from message
+   */
+  private getResourceFromMessage(message: TerminalMessage): string | undefined {
+    if ('sessionId' in message && message.sessionId) {
+      return `session:${message.sessionId}`;
+    }
+    if ('container' in message && message.container) {
+      return `container:${message.container}`;
+    }
+    return undefined;
+  }
+
+  /**
+   * Get user context for client
+   */
+  private getUserContext(clientId: string): UserContext | null {
+    return this.clientUsers.get(clientId) || null;
+  }
+
+  /**
+   * Send authentication response
+   */
+  private sendAuthResponse(
+    ws: WebSocket,
+    success: boolean,
+    error?: string,
+    user?: UserContext,
+    capabilities?: string[]
+  ): void {
+    ws.send(
+      JSON.stringify({
+        type: 'authResponse',
+        success,
+        error,
+        user: success ? user : undefined,
+        capabilities,
+      })
+    );
+  }
+
+  /**
+   * Send permission denied message
+   */
+  private sendPermissionDenied(
+    clientId: string,
+    operation: string,
+    error: string,
+    permission?: string
+  ): void {
+    const ws = this.getWebSocketByClientId(clientId);
+    if (ws) {
+      ws.send(
+        JSON.stringify({
+          type: 'permissionDenied',
+          operation,
+          error,
+          permission,
+        })
+      );
+    }
+  }
+
+  /**
+   * Get WebSocket connection by client ID
+   */
+  private getWebSocketByClientId(clientId: string): WebSocket | null {
+    if (!this.wss) return null;
+
+    for (const ws of this.wss.clients) {
+      if (this.clientIds.get(ws) === clientId) {
+        return ws;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Update sendServerInfo to include auth status
+   */
+  private sendServerInfo(ws: WebSocket, user?: UserContext | null): void {
+    const serverInfo: ServerInfo & {
+      authEnabled?: boolean;
+      requireAuth?: boolean;
+      user?: UserContext;
+    } = {
+      dockerEnabled: this.config.allowDockerExec,
+      allowedShells: this.config.allowedShells,
+      defaultShell: this.config.defaultShell,
+      defaultContainerShell: this.config.defaultContainerShell,
+    };
+
+    // Add auth info if auth provider is configured
+    if (this.authProvider) {
+      serverInfo.authEnabled = true;
+      serverInfo.requireAuth = this.config.requireAuth;
+      if (user) {
+        serverInfo.user = user;
+      }
+    }
+
+    ws.send(
+      JSON.stringify({
+        type: 'serverInfo',
+        info: serverInfo,
+      })
+    );
   }
 }
 

@@ -12,4 +12,6 @@ export type {
   SessionType,
   SessionListFilter,
   JoinSessionOptions,
+  // Authentication types
+  UserContext,
 } from '../shared/types.js';

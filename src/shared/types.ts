@@ -67,6 +67,14 @@ export interface ServerConfig {
   allowedContainerPatterns?: string[];
   /** Default shell to use inside containers */
   defaultContainerShell?: string;
+
+  // Authentication
+  /** Authentication provider instance */
+  authProvider?: AuthProvider | null;
+  /** Require authentication for all connections (default: false) */
+  requireAuth?: boolean;
+  /** Allow unauthenticated connections with limited permissions (default: true when authProvider is set) */
+  allowAnonymous?: boolean;
 }
 
 /**
@@ -92,7 +100,11 @@ export type MessageType =
   | 'left'
   | 'clientJoined'
   | 'clientLeft'
-  | 'sessionClosed';
+  | 'sessionClosed'
+  // Authentication
+  | 'auth'
+  | 'authResponse'
+  | 'permissionDenied';
 
 /**
  * Docker container info
@@ -236,7 +248,11 @@ export type TerminalMessage =
   | LeftMessage
   | ClientJoinedMessage
   | ClientLeftMessage
-  | SessionClosedMessage;
+  | SessionClosedMessage
+  // Authentication
+  | AuthMessage
+  | AuthResponseMessage
+  | PermissionDeniedMessage;
 
 /**
  * Client configuration
@@ -250,6 +266,14 @@ export interface ClientConfig {
   maxReconnectAttempts?: number;
   /** Initial reconnection delay in ms (default: 1000) */
   reconnectDelay?: number;
+
+  // Authentication options
+  /** Authentication token (JWT, session key, etc.) */
+  authToken?: string;
+  /** Additional auth headers to send during connection */
+  authHeaders?: Record<string, string>;
+  /** Custom auth data */
+  authData?: Record<string, any>;
 }
 
 /**
@@ -264,6 +288,8 @@ export interface SessionInfo {
   createdAt: Date;
   /** Container ID if this is a Docker exec session */
   container?: string;
+  /** User who created the session */
+  owner?: UserContext;
 }
 
 /**
@@ -388,4 +414,133 @@ export interface SessionClosedMessage extends BaseMessage {
   type: 'sessionClosed';
   sessionId: string;
   reason: 'orphan_timeout' | 'owner_closed' | 'process_exit' | 'error';
+}
+
+// =============================================================================
+// Authentication Types
+// =============================================================================
+
+/**
+ * User context information extracted by authentication
+ */
+export interface UserContext {
+  /** Unique user identifier */
+  userId: string;
+  /** Human-readable username */
+  username?: string;
+  /** User's permissions/roles */
+  permissions: string[];
+  /** Additional metadata from auth provider */
+  metadata?: Record<string, any>;
+}
+
+/**
+ * Authentication request from client
+ */
+export interface AuthMessage extends BaseMessage {
+  type: 'auth';
+  /** Authentication token (JWT, session key, etc.) */
+  token?: string;
+  /** Additional auth headers */
+  headers?: Record<string, string>;
+  /** Custom auth data */
+  data?: Record<string, any>;
+}
+
+/**
+ * Authentication response from server
+ */
+export interface AuthResponseMessage extends BaseMessage {
+  type: 'authResponse';
+  /** Whether authentication was successful */
+  success: boolean;
+  /** Error message if authentication failed */
+  error?: string;
+  /** User context if authentication succeeded */
+  user?: UserContext;
+  /** Server capabilities available to this user */
+  capabilities?: string[];
+}
+
+/**
+ * Permission denied error
+ */
+export interface PermissionDeniedMessage extends BaseMessage {
+  type: 'permissionDenied';
+  /** Operation that was denied */
+  operation: string;
+  /** Required permission */
+  permission?: string;
+  /** Error message */
+  error: string;
+}
+
+/**
+ * Authentication result from provider
+ */
+export interface AuthResult {
+  /** Whether authentication was successful */
+  success: boolean;
+  /** User context if successful */
+  user?: UserContext;
+  /** Error message if failed */
+  error?: string;
+}
+
+/**
+ * Authentication context from WebSocket request
+ */
+export interface AuthContext {
+  /** HTTP request object from WebSocket upgrade */
+  request: any;
+  /** WebSocket instance */
+  websocket: any;
+  /** Client IP address */
+  clientIp?: string;
+  /** User agent string */
+  userAgent?: string;
+}
+
+/**
+ * Permission check request
+ */
+export interface PermissionRequest {
+  /** User context */
+  user: UserContext;
+  /** Operation being attempted */
+  operation: string;
+  /** Resource being accessed (session, container, etc.) */
+  resource?: string;
+  /** Additional context */
+  context?: Record<string, any>;
+}
+
+/**
+ * Pluggable authentication provider interface
+ */
+export interface AuthProvider {
+  /**
+   * Authenticate a connection request from HTTP upgrade
+   */
+  authenticateConnection?(context: AuthContext): Promise<AuthResult>;
+
+  /**
+   * Authenticate using credentials from auth message
+   */
+  authenticateCredentials?(credentials: AuthMessage): Promise<AuthResult>;
+
+  /**
+   * Check if user has permission for operation
+   */
+  checkPermission(request: PermissionRequest): Promise<boolean>;
+
+  /**
+   * Get default permissions for anonymous users (if allowed)
+   */
+  getAnonymousPermissions?(): string[];
+
+  /**
+   * Called when user disconnects (cleanup)
+   */
+  onDisconnect?(user: UserContext): Promise<void>;
 }
