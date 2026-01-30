@@ -1,3 +1,5 @@
+DEPRECATED - This project has been renamed to lit-shell: https://github.com/lsadehaan/lit-shell
+
 # x-shell.js
 
 > WebSocket-based terminal for Node.js - the truth is in your shell
