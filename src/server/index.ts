@@ -15,6 +15,16 @@ export type {
 
 export { CircularBuffer } from './circular-buffer.js';
 
+// Authentication providers
+export {
+  NoAuthProvider,
+  SimpleAuthProvider,
+  JWTAuthProvider,
+  SessionAuthProvider,
+  CompositeAuthProvider,
+  PERMISSIONS,
+} from './auth-providers.js';
+
 export type {
   ServerConfig,
   TerminalOptions,
@@ -23,4 +33,10 @@ export type {
   SessionType,
   SessionListFilter,
   JoinSessionOptions,
+  // Authentication types
+  AuthProvider,
+  UserContext,
+  AuthContext,
+  AuthResult,
+  PermissionRequest,
 } from '../shared/types.js';
